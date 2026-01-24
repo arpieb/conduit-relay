@@ -20,18 +20,8 @@ echo "Downloading..."
 curl -sL "https://github.com/$REPO/releases/download/$LATEST/conduit-linux-amd64" -o "$INSTALL_DIR/conduit"
 chmod +x "$INSTALL_DIR/conduit"
 
-# Auto-detect optimal max-clients based on RAM
-RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
-if [ "$RAM_GB" -ge 8 ]; then
-  MAX_CLIENTS=1000
-elif [ "$RAM_GB" -ge 4 ]; then
-  MAX_CLIENTS=700
-elif [ "$RAM_GB" -ge 2 ]; then
-  MAX_CLIENTS=400
-else
-  MAX_CLIENTS=200
-fi
-echo "RAM: ${RAM_GB}GB -> max-clients: $MAX_CLIENTS"
+# Max clients (override with: curl ... | MAX_CLIENTS=500 bash)
+MAX_CLIENTS=${MAX_CLIENTS:-200}
 
 # Create data directory
 mkdir -p "$DATA_DIR"

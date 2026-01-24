@@ -2,8 +2,9 @@
 
 Volunteer relay for [Psiphon](https://psiphon.ca). Routes traffic for users in censored regions via WebRTC. Your VPS becomes an exit node.
 
-**Requirements:** Linux VPS, 1GB+ RAM, root access
+**Requirements:** Linux VPS, root access
 **Bandwidth:** 50-200 GB/day depending on demand
+**Default:** 200 max clients (override: `curl ... | MAX_CLIENTS=500 bash`)
 
 ---
 

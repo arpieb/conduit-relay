@@ -41,6 +41,7 @@ async function initDb() {
   } else {
     db = new SQL.Database();
   }
+  // Stats table stores cumulative values (offset + session)
   db.run(`
     CREATE TABLE IF NOT EXISTS stats (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,6 +52,16 @@ async function initDb() {
       upload_bytes INTEGER DEFAULT 0,
       download_bytes INTEGER DEFAULT 0,
       uptime TEXT
+    )
+  `);
+  // Offsets track cumulative totals across service restarts
+  db.run(`
+    CREATE TABLE IF NOT EXISTS offsets (
+      server TEXT PRIMARY KEY,
+      upload_offset INTEGER DEFAULT 0,
+      download_offset INTEGER DEFAULT 0,
+      last_upload INTEGER DEFAULT 0,
+      last_download INTEGER DEFAULT 0
     )
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_stats_timestamp ON stats(timestamp)`);
@@ -158,11 +169,51 @@ function parseConduitStatus(output, serverName) {
   return result;
 }
 
+// Get or create offset record for a server
+function getOffset(server) {
+  const stmt = db.prepare(`SELECT upload_offset, download_offset, last_upload, last_download FROM offsets WHERE server = ?`);
+  stmt.bind([server]);
+  let offset = { upload_offset: 0, download_offset: 0, last_upload: 0, last_download: 0 };
+  if (stmt.step()) offset = stmt.getAsObject();
+  stmt.free();
+  return offset;
+}
+
 function saveStats(stats) {
   const timestamp = Date.now();
   for (const s of stats) {
+    const sessionUp = parseBytes(s.upload);
+    const sessionDown = parseBytes(s.download);
+
+    // Get current offset and last known session values
+    const offset = getOffset(s.name);
+
+    // Detect reset: current value dropped significantly (service restart)
+    // Only trigger if current < 50% of last AND last was meaningful (> 1MB)
+    let newUpOffset = offset.upload_offset;
+    let newDownOffset = offset.download_offset;
+    const MIN_FOR_RESET = 1024 * 1024; // 1MB minimum to consider reset
+
+    if (sessionUp < offset.last_upload * 0.5 && offset.last_upload > MIN_FOR_RESET) {
+      newUpOffset += offset.last_upload;
+      console.log(`[RESET] ${s.name} upload reset: ${formatBytes(offset.last_upload)} -> ${formatBytes(sessionUp)}, offset now ${formatBytes(newUpOffset)}`);
+    }
+    if (sessionDown < offset.last_download * 0.5 && offset.last_download > MIN_FOR_RESET) {
+      newDownOffset += offset.last_download;
+      console.log(`[RESET] ${s.name} download reset: ${formatBytes(offset.last_download)} -> ${formatBytes(sessionDown)}, offset now ${formatBytes(newDownOffset)}`);
+    }
+
+    // Cumulative = offset + current session
+    const cumulativeUp = newUpOffset + sessionUp;
+    const cumulativeDown = newDownOffset + sessionDown;
+
+    // Save cumulative stats
     db.run(`INSERT INTO stats (timestamp, server, status, clients, upload_bytes, download_bytes, uptime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [timestamp, s.name, s.status, s.clients, parseBytes(s.upload), parseBytes(s.download), s.uptime]);
+      [timestamp, s.name, s.status, s.clients, cumulativeUp, cumulativeDown, s.uptime]);
+
+    // Update offsets table
+    db.run(`INSERT OR REPLACE INTO offsets (server, upload_offset, download_offset, last_upload, last_download) VALUES (?, ?, ?, ?, ?)`,
+      [s.name, newUpOffset, newDownOffset, sessionUp, sessionDown]);
   }
   saveDb();
 }
@@ -182,6 +233,13 @@ async function fetchServerStats(server) {
   }
 }
 
+// Format bytes for display
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + ['B', 'KB', 'MB', 'GB', 'TB'][i];
+}
+
 async function fetchAllStats() {
   const now = Date.now();
   if (statsCache.data && (now - statsCache.timestamp) < CACHE_TTL) return statsCache.data;
@@ -193,8 +251,21 @@ async function fetchAllStats() {
     if (i + BATCH_SIZE < SERVERS.length) await new Promise(r => setTimeout(r, BATCH_DELAY));
   }
 
-  statsCache = { data: results, timestamp: now };
+  // Save stats first (this updates offsets)
   try { saveStats(results); } catch (e) { console.error('Failed to save stats:', e); }
+
+  // Add cumulative values to results for display
+  for (const s of results) {
+    const sessionUp = parseBytes(s.upload);
+    const sessionDown = parseBytes(s.download);
+    const offset = getOffset(s.name);
+
+    // Calculate cumulative (offset already updated in saveStats)
+    s.upload = formatBytes(offset.upload_offset + sessionUp);
+    s.download = formatBytes(offset.download_offset + sessionDown);
+  }
+
+  statsCache = { data: results, timestamp: now };
   return results;
 }
 
@@ -247,6 +318,35 @@ app.get('/api/history/:server', requireAuth, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Debug endpoint to view/reset offsets
+app.get('/api/offsets', requireAuth, (_, res) => {
+  try {
+    const stmt = db.prepare(`SELECT * FROM offsets`);
+    const rows = [];
+    while (stmt.step()) rows.push(stmt.getAsObject());
+    stmt.free();
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/offsets/reset', requireAuth, (_, res) => {
+  try {
+    db.run(`DELETE FROM offsets`);
+    saveDb();
+    res.json({ success: true, message: 'Offsets reset' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Clear all historical stats (use after switching to cumulative tracking)
+app.post('/api/stats/clear', requireAuth, (_, res) => {
+  try {
+    db.run(`DELETE FROM stats`);
+    db.run(`DELETE FROM offsets`);
+    saveDb();
+    res.json({ success: true, message: 'Stats and offsets cleared' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/bandwidth', requireAuth, (_, res) => {
   try {
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
@@ -257,8 +357,10 @@ app.get('/api/bandwidth', requireAuth, (_, res) => {
       stmt.bind([server.name, startOfMonth]);
       if (stmt.step()) {
         const row = stmt.getAsObject();
-        const total = (row.max_up || 0) + (row.max_down || 0);
-        results[server.name] = { upload: row.max_up || 0, download: row.max_down || 0, total, limit, percent: limit ? Math.round((total / limit) * 10000) / 100 : 0 };
+        const upload = row.max_up || 0;
+        const download = row.max_down || 0;
+        // Only upload counts toward metered bandwidth (download is unmetered)
+        results[server.name] = { upload, download, total: upload, limit, percent: limit ? Math.round((upload / limit) * 10000) / 100 : 0 };
       }
       stmt.free();
     }
@@ -304,9 +406,10 @@ async function checkBandwidthLimits() {
       stmt.bind([server.name, startOfMonth]);
       if (stmt.step()) {
         const row = stmt.getAsObject();
-        const total = (row.max_up || 0) + (row.max_down || 0);
-        if (total >= server.bandwidthLimit) {
-          console.log(`[AUTO-STOP] ${server.name} exceeded limit (${(total / 1024**4).toFixed(2)} TB / ${(server.bandwidthLimit / 1024**4).toFixed(2)} TB)`);
+        // Only upload counts toward metered bandwidth (download is unmetered)
+        const upload = row.max_up || 0;
+        if (upload >= server.bandwidthLimit) {
+          console.log(`[AUTO-STOP] ${server.name} exceeded limit (${(upload / 1024**4).toFixed(2)} TB / ${(server.bandwidthLimit / 1024**4).toFixed(2)} TB)`);
           try { await sshExec(server, 'systemctl stop conduit'); console.log(`[AUTO-STOP] ${server.name} stopped`); }
           catch (e) { console.error(`[AUTO-STOP] Failed to stop ${server.name}:`, e.message); }
         }
