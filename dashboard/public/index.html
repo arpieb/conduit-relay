@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Conduit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #0a0a0a;
+      min-height: 100vh;
+      color: #e5e5e5;
+    }
+    .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid #1a1a1a;
+      margin-bottom: 2rem;
+    }
+    .logo {
+      font-size: 1.25rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .logo span { color: #22c55e; }
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+      font-size: 0.8125rem;
+      color: #525252;
+    }
+    .header-meta a { color: #525252; text-decoration: none; transition: color 0.15s; }
+    .header-meta a:hover { color: #e5e5e5; }
+    .pulse {
+      width: 6px; height: 6px;
+      background: #22c55e;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Summary bar */
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: #1a1a1a;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+    .summary-item {
+      background: #0a0a0a;
+      padding: 1.25rem 1.5rem;
+    }
+    .summary-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.75rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 0.25rem;
+    }
+    .summary-label {
+      font-size: 0.75rem;
+      color: #525252;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Chart */
+    .chart-section {
+      background: #111;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    .chart-title {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #a3a3a3;
+    }
+    #trafficChart { height: 200px !important; }
+
+    /* Nodes grid */
+    .nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+
+    .node {
+      background: #111;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      padding: 1.25rem;
+      transition: border-color 0.15s;
+    }
+    .node:hover { border-color: #262626; }
+
+    .node-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .node-name {
+      font-weight: 600;
+      font-size: 0.9375rem;
+      margin-bottom: 0.125rem;
+    }
+    .node-ip {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: #525252;
+    }
+
+    .status {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+    }
+    .status-connected { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .status-active { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .status-running { background: rgba(59,130,246,0.15); color: #3b82f6; }
+    .status-waiting { background: rgba(234,179,8,0.15); color: #eab308; }
+    .status-stopped { background: rgba(82,82,82,0.15); color: #525252; }
+    .status-offline { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .status-error { background: rgba(239,68,68,0.15); color: #ef4444; }
+
+    .node-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.75rem;
+    }
+    .node-stat-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.125rem;
+      font-weight: 500;
+      color: #fff;
+    }
+    .node-stat-label {
+      font-size: 0.6875rem;
+      color: #525252;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 0.125rem;
+    }
+    .node-error {
+      margin-top: 0.75rem;
+      padding: 0.5rem;
+      background: rgba(239,68,68,0.1);
+      border-radius: 4px;
+      font-size: 0.75rem;
+      color: #ef4444;
+    }
+
+    /* Loading */
+    .loading {
+      text-align: center;
+      padding: 3rem;
+      color: #525252;
+      font-size: 0.875rem;
+    }
+
+    /* Bandwidth section */
+    .bandwidth-section {
+      background: #111;
+      border: 1px solid #1a1a1a;
+      border-radius: 8px;
+      margin-top: 2rem;
+    }
+    .bandwidth-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 1.5rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .bandwidth-header:hover { background: #161616; border-radius: 8px; }
+    .bandwidth-title { font-size: 0.875rem; font-weight: 500; color: #a3a3a3; display: flex; align-items: center; gap: 0.5rem; }
+    .bandwidth-title::before { content: '▶'; font-size: 0.625rem; transition: transform 0.2s; }
+    .bandwidth-section.open .bandwidth-title::before { transform: rotate(90deg); }
+    .bandwidth-content { display: none; padding: 0 1.5rem 1.5rem; }
+    .bandwidth-section.open .bandwidth-content { display: block; }
+    .bandwidth-bars { display: flex; flex-direction: column; gap: 0.75rem; }
+    .bandwidth-row { display: flex; align-items: center; gap: 1rem; }
+    .bandwidth-label { width: 80px; font-size: 0.75rem; color: #737373; }
+    .bandwidth-bar-wrap { flex: 1; height: 8px; background: #262626; border-radius: 4px; overflow: hidden; }
+    .bandwidth-bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
+    .bandwidth-bar.safe { background: #22c55e; }
+    .bandwidth-bar.warning { background: #eab308; }
+    .bandwidth-bar.danger { background: #ef4444; }
+    .bandwidth-value { width: 100px; font-size: 0.75rem; color: #a3a3a3; text-align: right; font-family: 'JetBrains Mono', monospace; }
+
+    /* Controls */
+    .controls { display: flex; gap: 0.5rem; }
+    .btn {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-danger { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .btn-danger:hover { background: rgba(239,68,68,0.25); }
+    .btn-success { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .btn-success:hover { background: rgba(34,197,94,0.25); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    @media (max-width: 640px) {
+      .summary { grid-template-columns: repeat(2, 1fr); }
+      .summary-value { font-size: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">conduit<span>.</span></div>
+      <div class="header-meta">
+        <div class="pulse"></div>
+        <span id="lastUpdate">-</span>
+        <a href="/logout">Logout</a>
+      </div>
+    </header>
+
+    <div class="summary">
+      <div class="summary-item">
+        <div class="summary-value" id="totalNodes">-</div>
+        <div class="summary-label">Nodes Online</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value" id="totalClients">-</div>
+        <div class="summary-label">Clients</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value" id="totalUpload">-</div>
+        <div class="summary-label">Upload</div>
+      </div>
+      <div class="summary-item">
+        <div class="summary-value" id="totalDownload">-</div>
+        <div class="summary-label">Download</div>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <div class="chart-header">
+        <span class="chart-title">Traffic (24h)</span>
+      </div>
+      <canvas id="trafficChart"></canvas>
+    </div>
+
+    <div class="nodes" id="nodes">
+      <div class="loading">Loading...</div>
+    </div>
+
+    <div class="bandwidth-section" id="bandwidthSection">
+      <div class="bandwidth-header" onclick="document.getElementById('bandwidthSection').classList.toggle('open')">
+        <span class="bandwidth-title">Monthly Bandwidth (auto-stop at limit)</span>
+        <div class="controls" onclick="event.stopPropagation()">
+          <button class="btn btn-danger" id="stopAll" onclick="controlAll('stop')">Stop All</button>
+          <button class="btn btn-success" id="startAll" onclick="controlAll('start')">Start All</button>
+        </div>
+      </div>
+      <div class="bandwidth-content">
+        <div class="bandwidth-bars" id="bandwidthBars">
+          <div class="loading">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const parseBytes = str => {
+      if (!str || str === 'N/A') return 0;
+      const m = str.match(/^([\d.]+)\s*([KMGTPE]?B?)$/i);
+      if (!m) return 0;
+      const units = { B: 1, KB: 1024, MB: 1024**2, GB: 1024**3, TB: 1024**4 };
+      return parseFloat(m[1]) * (units[(m[2] || 'B').toUpperCase()] || 1);
+    };
+
+    const formatBytes = b => {
+      if (b === 0) return '0 B';
+      const i = Math.floor(Math.log(b) / Math.log(1024));
+      return (b / Math.pow(1024, i)).toFixed(1) + ' ' + ['B','KB','MB','GB','TB'][i];
+    };
+
+    const renderNode = s => `
+      <div class="node" data-server="${s.name}">
+        <div class="node-header">
+          <div>
+            <div class="node-name">${s.name}</div>
+            <div class="node-ip">${s.host || ''}</div>
+          </div>
+          <span class="status status-${s.status}" data-field="status">${s.status}</span>
+        </div>
+        <div class="node-stats">
+          <div><div class="node-stat-value" data-field="clients">${s.clients}</div><div class="node-stat-label">Clients</div></div>
+          <div><div class="node-stat-value" data-field="uptime">${s.uptime}</div><div class="node-stat-label">Uptime</div></div>
+          <div><div class="node-stat-value" data-field="upload">${s.upload}</div><div class="node-stat-label">Upload</div></div>
+          <div><div class="node-stat-value" data-field="download">${s.download}</div><div class="node-stat-label">Download</div></div>
+        </div>
+        <div class="node-error" data-field="error" style="${s.error ? '' : 'display:none'}">${s.error || ''}</div>
+      </div>
+    `;
+
+    async function fetchStats() {
+      try {
+        const res = await fetch('/api/stats');
+        if (res.status === 401) return location.href = '/login';
+        const data = await res.json();
+
+        const nodesEl = document.getElementById('nodes');
+        const existingNodes = nodesEl.querySelectorAll('.node[data-server]');
+
+        // If structure changed, do full render
+        if (existingNodes.length !== data.length) {
+          nodesEl.innerHTML = data.map(renderNode).join('');
+        } else {
+          // Graceful update - only update changed values
+          for (const s of data) {
+            const node = nodesEl.querySelector(`[data-server="${s.name}"]`);
+            if (!node) continue;
+
+            const statusEl = node.querySelector('[data-field="status"]');
+            if (statusEl.textContent !== s.status) {
+              statusEl.textContent = s.status;
+              statusEl.className = `status status-${s.status}`;
+            }
+
+            const fields = { clients: s.clients, uptime: s.uptime, upload: s.upload, download: s.download };
+            for (const [field, val] of Object.entries(fields)) {
+              const el = node.querySelector(`[data-field="${field}"]`);
+              if (el && el.textContent !== String(val)) el.textContent = val;
+            }
+
+            const errEl = node.querySelector('[data-field="error"]');
+            if (errEl) {
+              errEl.textContent = s.error || '';
+              errEl.style.display = s.error ? '' : 'none';
+            }
+          }
+        }
+
+        const active = data.filter(s => ['connected','active','running','waiting'].includes(s.status)).length;
+        document.getElementById('totalNodes').textContent = `${active}/${data.length}`;
+        document.getElementById('totalClients').textContent = data.reduce((a, s) => a + s.clients, 0);
+        document.getElementById('totalUpload').textContent = formatBytes(data.reduce((a, s) => a + parseBytes(s.upload), 0));
+        document.getElementById('totalDownload').textContent = formatBytes(data.reduce((a, s) => a + parseBytes(s.download), 0));
+        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById('nodes').innerHTML = `<div class="loading">Error: ${e.message}</div>`;
+      }
+    }
+
+    let chart = null;
+    const colors = { racknerd1: '#3b82f6', racknerd2: '#8b5cf6', racknerd3: '#22c55e', desivps: '#f59e0b' };
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch('/api/history?hours=24');
+        if (res.status === 401) return;
+        const data = await res.json();
+
+        const grouped = {};
+        for (const r of data) {
+          const ts = Math.floor(r.timestamp / 300000) * 300000;
+          grouped[ts] = grouped[ts] || {};
+          grouped[ts][r.server] = (r.upload_bytes + r.download_bytes) / 1024 / 1024;
+        }
+
+        const times = Object.keys(grouped).sort((a,b) => a-b);
+        const labels = times.map(t => new Date(+t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));
+        const servers = [...new Set(data.map(r => r.server))];
+
+        const defaultColors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899'];
+        const datasets = servers.map((s, i) => ({
+          label: s,
+          data: times.map(t => grouped[t][s] || 0),
+          borderColor: colors[s] || defaultColors[i % defaultColors.length],
+          backgroundColor: (colors[s] || defaultColors[i % defaultColors.length]) + '20',
+          borderWidth: 1.5,
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+        }));
+
+        const ctx = document.getElementById('trafficChart').getContext('2d');
+        if (chart) chart.destroy();
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { intersect: false, mode: 'index' },
+            plugins: {
+              legend: { display: true, position: 'top', align: 'end', labels: { color: '#525252', boxWidth: 8, padding: 16, font: { size: 11 } } }
+            },
+            scales: {
+              x: { ticks: { color: '#404040', maxTicksLimit: 8, font: { size: 10 } }, grid: { color: '#1a1a1a' }, border: { color: '#1a1a1a' } },
+              y: { ticks: { color: '#404040', callback: v => v.toFixed(0) + ' MB', font: { size: 10 } }, grid: { color: '#1a1a1a' }, border: { color: '#1a1a1a' } }
+            }
+          }
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    const formatBandwidth = b => {
+      if (b === 0) return '0 B';
+      const i = Math.floor(Math.log(b) / Math.log(1024));
+      return (b / Math.pow(1024, i)).toFixed(2) + ' ' + ['B','KB','MB','GB','TB'][i];
+    };
+
+    async function fetchBandwidth() {
+      try {
+        const res = await fetch('/api/bandwidth');
+        if (res.status === 401) return;
+        const data = await res.json();
+
+        const container = document.getElementById('bandwidthBars');
+        const entries = Object.entries(data);
+
+        // Check if structure changed
+        const existingRows = container.querySelectorAll('.bandwidth-row[data-server]');
+        if (existingRows.length !== entries.length) {
+          // Full render
+          container.innerHTML = entries.map(([name, info]) => {
+            const pct = Math.min(info.percent, 100);
+            const barClass = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'safe';
+            const limitStr = info.limit ? formatBandwidth(info.limit) : 'unlimited';
+            return `
+              <div class="bandwidth-row" data-server="${name}">
+                <span class="bandwidth-label">${name}</span>
+                <div class="bandwidth-bar-wrap">
+                  <div class="bandwidth-bar ${barClass}" style="width: ${info.limit ? pct : 0}%"></div>
+                </div>
+                <span class="bandwidth-value">${formatBandwidth(info.total)} / ${limitStr}${info.limit ? ` (${info.percent.toFixed(1)}%)` : ''}</span>
+              </div>
+            `;
+          }).join('') || '<div class="loading">No data</div>';
+        } else {
+          // Graceful update
+          for (const [name, info] of entries) {
+            const row = container.querySelector(`[data-server="${name}"]`);
+            if (!row) continue;
+
+            const pct = Math.min(info.percent, 100);
+            const barClass = pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'safe';
+            const limitStr = info.limit ? formatBandwidth(info.limit) : 'unlimited';
+
+            const bar = row.querySelector('.bandwidth-bar');
+            bar.className = `bandwidth-bar ${barClass}`;
+            bar.style.width = `${info.limit ? pct : 0}%`;
+
+            const val = row.querySelector('.bandwidth-value');
+            val.textContent = `${formatBandwidth(info.total)} / ${limitStr}${info.limit ? ` (${info.percent.toFixed(1)}%)` : ''}`;
+          }
+        }
+      } catch (e) {
+        console.error('Bandwidth fetch failed:', e);
+      }
+    }
+
+    async function controlAll(action) {
+      const btn = document.getElementById(action === 'stop' ? 'stopAll' : 'startAll');
+      btn.disabled = true;
+      btn.textContent = action === 'stop' ? 'Stopping...' : 'Starting...';
+
+      try {
+        const res = await fetch(`/api/control/${action}`, { method: 'POST' });
+        const data = await res.json();
+
+        if (data.results) {
+          const failed = data.results.filter(r => !r.success);
+          if (failed.length > 0) {
+            alert(`Some servers failed: ${failed.map(f => f.server + ': ' + f.error).join(', ')}`);
+          }
+        }
+
+        // Refresh stats after action
+        setTimeout(() => {
+          fetchStats();
+          fetchBandwidth();
+        }, 2000);
+      } catch (e) {
+        alert('Control action failed: ' + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = action === 'stop' ? 'Stop All' : 'Start All';
+      }
+    }
+
+    fetchStats();
+    fetchHistory();
+    fetchBandwidth();
+    setInterval(fetchStats, 10000);
+    setInterval(fetchHistory, 60000);
+    setInterval(fetchBandwidth, 60000);
+  </script>
+</body>
+</html>

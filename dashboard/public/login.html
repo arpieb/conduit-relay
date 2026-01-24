@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Conduit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #0a0a0a;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #e5e5e5;
+    }
+    .login {
+      width: 100%;
+      max-width: 320px;
+      padding: 0 1rem;
+    }
+    .logo {
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .logo span { color: #22c55e; }
+    .subtitle {
+      text-align: center;
+      color: #525252;
+      font-size: 0.875rem;
+      margin-bottom: 2rem;
+    }
+    .error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.2);
+      color: #ef4444;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      font-size: 0.8125rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.875rem 1rem;
+      background: #111;
+      border: 1px solid #262626;
+      border-radius: 6px;
+      color: #e5e5e5;
+      font-size: 0.9375rem;
+      font-family: inherit;
+      margin-bottom: 1rem;
+      transition: border-color 0.15s;
+    }
+    input:focus {
+      outline: none;
+      border-color: #404040;
+    }
+    input::placeholder { color: #525252; }
+    button {
+      width: 100%;
+      padding: 0.875rem;
+      background: #22c55e;
+      border: none;
+      border-radius: 6px;
+      color: #000;
+      font-size: 0.9375rem;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover { background: #16a34a; }
+  </style>
+</head>
+<body>
+  <div class="login">
+    <div class="logo">conduit<span>.</span></div>
+    <p class="subtitle">Relay network dashboard</p>
+    <script>if(location.search.includes('error=1'))document.write('<div class="error">Invalid password</div>');</script>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password" required autofocus>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>
