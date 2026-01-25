@@ -41,6 +41,19 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Ask about relay installation (skip if DASHBOARD_ONLY already set)
+if [ "$DASHBOARD_ONLY" != "1" ]; then
+  echo -e "${CYAN}Install Conduit Relay on this device? (routes traffic for users)${NC}"
+  echo -e "  ${BOLD}Y${NC} = Yes, this is a VPS I want to use as a relay"
+  echo -e "  ${BOLD}N${NC} = No, just the dashboard (e.g., running on laptop)"
+  echo ""
+  read -r -p "Install relay? [Y/n]: " INSTALL_RELAY
+  if [[ "$INSTALL_RELAY" =~ ^[Nn]$ ]]; then
+    DASHBOARD_ONLY=1
+  fi
+  echo ""
+fi
+
 #
 # Step 1: Install Conduit Relay (skip if DASHBOARD_ONLY=1)
 #
