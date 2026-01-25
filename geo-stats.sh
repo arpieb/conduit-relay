@@ -58,7 +58,7 @@ echo "$STATS" | head -15 | while read count country; do
 
   # Calculate bar width (max 30 chars)
   BAR_WIDTH=$((count * 30 / MAX_COUNT))
-  BAR=$(printf '%*s' "$BAR_WIDTH" | tr ' ' '█')
+  BAR=$(printf '%*s' "$BAR_WIDTH" | tr ' ' '#')
 
   # Color Iran green
   if [ "$CODE" = "IR" ]; then

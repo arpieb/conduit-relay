@@ -83,7 +83,7 @@ show_geo() {
     CODE=$(echo "$country" | cut -d',' -f1)
     NAME=$(echo "$country" | cut -d',' -f2- | sed 's/^ *//' | cut -c1-18)
     BAR_W=$((count * 25 / MAX))
-    BAR=$(printf '%*s' "$BAR_W" | tr ' ' '█')
+    BAR=$(printf '%*s' "$BAR_W" | tr ' ' '#')
     if [ "$CODE" = "IR" ]; then
       printf "  ${GREEN}%3d  %-2s %-18s %s${NC}\n" "$count" "$CODE" "$NAME" "$BAR"
     else
