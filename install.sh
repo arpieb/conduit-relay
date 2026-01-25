@@ -1,28 +1,40 @@
 #!/bin/bash
 set -e
 
-REPO="ssmirr/conduit"
 INSTALL_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/conduit"
 SERVICE_FILE="/etc/systemd/system/conduit.service"
+
+# Binary sources (try in order)
+PRIMARY_URL="https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64"
+FALLBACK_REPO="ssmirr/conduit"
 
 # Install geoip-bin for dashboard geo stats
 echo "Installing dependencies..."
 apt-get update -qq && apt-get install -y -qq geoip-bin >/dev/null 2>&1 || true
 
-# Get latest release
-echo "Fetching latest release..."
-LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep -oP '"tag_name": "\K[^"]+')
-if [ -z "$LATEST" ]; then
-  echo "Failed to get latest release"
+# Download binary (try primary, then fallback)
+echo "Downloading conduit..."
+if curl -sL "$PRIMARY_URL" -o "$INSTALL_DIR/conduit" && [ -s "$INSTALL_DIR/conduit" ]; then
+  echo "Downloaded from primary source"
+else
+  echo "Primary failed, trying fallback..."
+  LATEST=$(curl -s "https://api.github.com/repos/$FALLBACK_REPO/releases/latest" | grep -oP '"tag_name": "\K[^"]+')
+  if [ -z "$LATEST" ]; then
+    echo "Failed to get fallback release"
+    exit 1
+  fi
+  curl -sL "https://github.com/$FALLBACK_REPO/releases/download/$LATEST/conduit-linux-amd64" -o "$INSTALL_DIR/conduit"
+  echo "Downloaded from fallback ($LATEST)"
+fi
+chmod +x "$INSTALL_DIR/conduit"
+
+# Verify binary works
+if ! "$INSTALL_DIR/conduit" --version >/dev/null 2>&1; then
+  echo "Binary verification failed"
   exit 1
 fi
-echo "Latest: $LATEST"
-
-# Download binary
-echo "Downloading..."
-curl -sL "https://github.com/$REPO/releases/download/$LATEST/conduit-linux-amd64" -o "$INSTALL_DIR/conduit"
-chmod +x "$INSTALL_DIR/conduit"
+echo "Version: $($INSTALL_DIR/conduit --version)"
 
 # Configuration (override with: curl ... | MAX_CLIENTS=500 BANDWIDTH=100 bash)
 # -m: max concurrent clients (default 200, CLI default is 50)
