@@ -46,7 +46,7 @@ Are you sure you want to continue connecting (yes/no)?
 
 این رو کپی پیست کن:
 ```bash
-curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
 ```
 
 صبر کن تا تموم بشه. آخرش یه چیزی مثل این میبینی:
@@ -101,7 +101,7 @@ http://123.45.67.89:3000
 اگه میخوای تعداد کلاینت یا پهنای باند رو تغییر بدی:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | MAX_CLIENTS=500 BANDWIDTH=100 bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo MAX_CLIENTS=500 BANDWIDTH=100 bash
 ```
 
 - `MAX_CLIENTS`: حداکثر کلاینت همزمان (پیش‌فرض: 200)
@@ -150,7 +150,7 @@ First time it asks about fingerprint - type `yes`, enter. Then paste password.
 ## 3. Install (One Command)
 
 ```bash
-curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
 ```
 
 After it finishes you'll see:
@@ -176,7 +176,7 @@ Run the same join command on any server to add it.
 
 Custom client/bandwidth limits:
 ```bash
-curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | MAX_CLIENTS=500 BANDWIDTH=100 bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo MAX_CLIENTS=500 BANDWIDTH=100 bash
 ```
 
 - `MAX_CLIENTS`: Max concurrent clients (default: 200)
