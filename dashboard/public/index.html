@@ -1024,22 +1024,59 @@
         const data = await res.json();
 
         const banner = document.getElementById('updateBanner');
+        let bannerHTML = '';
+
+        // Relay update
         if (data.updateAvailable && data.serversNeedingUpdate?.length > 0) {
           const count = data.serversNeedingUpdate.length;
-          banner.innerHTML = `
+          bannerHTML += `
             <div class="update-banner">
               <div class="update-banner-text">
-                Update available: <span>${data.latest}</span> - ${count} server${count > 1 ? 's' : ''} need${count === 1 ? 's' : ''} update
+                Relay update: <span>${data.latest}</span> - ${count} server${count > 1 ? 's' : ''} need${count === 1 ? 's' : ''} update
               </div>
               <button class="update-banner-btn" onclick="updateAllServers()">Update All</button>
             </div>
           `;
-          banner.style.display = 'block';
-        } else {
-          banner.style.display = 'none';
         }
+
+        // Dashboard update
+        if (data.dashboard?.updateAvailable) {
+          bannerHTML += `
+            <div class="update-banner dashboard-update">
+              <div class="update-banner-text">
+                Dashboard update: <span>${data.dashboard.local}</span> → <span>${data.dashboard.latest}</span>
+              </div>
+              <button class="update-banner-btn" onclick="updateDashboard()">Update Dashboard</button>
+            </div>
+          `;
+        }
+
+        banner.innerHTML = bannerHTML;
+        banner.style.display = bannerHTML ? 'block' : 'none';
       } catch (e) {
         console.error('Update check failed:', e);
+      }
+    }
+
+    async function updateDashboard() {
+      const btn = document.querySelector('.dashboard-update .update-banner-btn');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Updating...';
+      }
+      try {
+        const res = await fetch('/api/update-dashboard', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          alert('Dashboard updated. Page will reload.');
+          setTimeout(() => location.reload(), 2000);
+        } else {
+          alert('Update failed: ' + (data.error || 'Unknown error'));
+          if (btn) btn.textContent = 'Update Dashboard';
+        }
+      } catch (e) {
+        alert('Update failed: ' + e.message);
+        if (btn) btn.textContent = 'Update Dashboard';
       }
     }
 

@@ -712,12 +712,24 @@ const FALLBACK_BINARY_URL = 'https://raw.githubusercontent.com/paradixe/conduit-
 
 let cachedLatestVersion = null;
 let versionCacheTime = 0;
+let cachedDashboardVersion = null;
+let dashboardVersionCacheTime = 0;
 
 // Extract version number from tag (e.g., "release-cli-1.0.0" -> "1.0.0")
 function extractVersion(tag) {
   if (!tag) return null;
   const match = tag.match(/(\d+\.\d+\.\d+)/);
   return match ? match[1] : tag;
+}
+
+// Get local dashboard version (git commit hash)
+function getLocalDashboardVersion() {
+  try {
+    const { execSync } = require('child_process');
+    return execSync('git rev-parse --short HEAD', { cwd: __dirname, encoding: 'utf8' }).trim();
+  } catch {
+    return 'unknown';
+  }
 }
 
 // GET /api/version - Check current vs latest version
@@ -748,11 +760,32 @@ app.get('/api/version', requireAuth, async (req, res) => {
 
     const needsUpdate = versions.filter(v => v.version !== cachedLatestVersion && v.version !== 'error' && v.version !== 'unknown');
 
+    // Check dashboard version (cache for 5 minutes)
+    let dashboardLatest = cachedDashboardVersion;
+    if (!dashboardLatest || Date.now() - dashboardVersionCacheTime > 300000) {
+      try {
+        const ghRes = await fetch('https://api.github.com/repos/paradixe/conduit-relay/commits/main');
+        if (ghRes.ok) {
+          const data = await ghRes.json();
+          dashboardLatest = data.sha?.substring(0, 7) || null;
+          cachedDashboardVersion = dashboardLatest;
+          dashboardVersionCacheTime = Date.now();
+        }
+      } catch {}
+    }
+    const dashboardLocal = getLocalDashboardVersion();
+    const dashboardNeedsUpdate = dashboardLatest && dashboardLocal !== 'unknown' && dashboardLocal !== dashboardLatest;
+
     res.json({
       latest: cachedLatestVersion,
       servers: versions,
       updateAvailable: needsUpdate.length > 0,
-      serversNeedingUpdate: needsUpdate.map(v => v.server)
+      serversNeedingUpdate: needsUpdate.map(v => v.server),
+      dashboard: {
+        local: dashboardLocal,
+        latest: dashboardLatest,
+        updateAvailable: dashboardNeedsUpdate
+      }
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
