@@ -7,6 +7,8 @@ Volunteer relay for [Psiphon](https://psiphon.ca). Routes traffic for users in c
 
 **New?** Check the [step-by-step setup guide](SETUP.md) (English + فارسی)
 
+**OrangePi/Raspberry Pi?** See the [Portainer setup guide](docs/portainer-setup.md)
+
 ---
 
 ## Quick Start (Relay + Dashboard)
@@ -15,6 +17,11 @@ One command installs everything:
 
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
+```
+
+**Already have Docker/ssmirr's setup?** Use `docker-setup.sh` instead - it detects existing containers and offers migration:
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-setup.sh | sudo bash
 ```
 
 You'll get:
@@ -30,7 +37,30 @@ Optionally enter a domain during setup to get HTTPS via Let's Encrypt.
 curl -sL "http://YOUR_DASHBOARD_IP:3000/join/TOKEN" | sudo bash
 ```
 
-Servers auto-register and appear on your dashboard.
+Servers auto-register and appear on your dashboard. The join script auto-detects Docker - if available, it uses containers; otherwise native install.
+
+**Mixed fleets supported:** Dashboard monitors both Docker and native servers.
+
+---
+
+## Updating
+
+Already installed? Update everything with one command:
+
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/update.sh | sudo bash
+```
+
+Or from the dashboard: **Settings → Update Dashboard**
+
+This updates both the relay binary and dashboard code while preserving your config.
+
+**Uninstall:**
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/uninstall.sh | sudo bash
+```
+
+Removes both native and Docker installations.
 
 ---
 
@@ -48,19 +78,32 @@ Servers auto-register and appear on your dashboard.
 
 If you just want the relay without the web dashboard:
 
+**Native:**
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/install.sh | sudo bash
 ```
 
+**Docker:**
+```bash
+curl -sLO https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-compose.relay-only.yml
+docker compose -f docker-compose.relay-only.yml up -d
+```
+
 **Configuration:**
-- `-m 200` max clients (default)
-- `-b -1` unlimited bandwidth (default)
+- `MAX_CLIENTS=200` max concurrent clients (default)
+- `BANDWIDTH=-1` unlimited bandwidth (default)
 
 Custom: `curl ... | MAX_CLIENTS=500 BANDWIDTH=100 bash`
 
+**Commands:**
 ```bash
+# Native
 systemctl status conduit      # status
 journalctl -u conduit -f      # logs
+
+# Docker
+docker logs conduit-relay -f  # logs
+docker ps                     # status
 ```
 
 ---

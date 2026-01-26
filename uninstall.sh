@@ -1,5 +1,6 @@
 #!/bin/bash
 # Conduit Relay + Dashboard Uninstaller
+# Handles both native (systemd) and Docker installations
 set -e
 
 RED='\033[0;31m'
@@ -15,10 +16,28 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Detect what's installed
+NATIVE_RELAY=false
+NATIVE_DASHBOARD=false
+DOCKER_CONTAINERS=false
+
+[ -f /etc/systemd/system/conduit.service ] || [ -f /usr/local/bin/conduit ] && NATIVE_RELAY=true
+[ -f /etc/systemd/system/conduit-dashboard.service ] || [ -d /opt/conduit-dashboard ] && NATIVE_DASHBOARD=true
+docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qE '^conduit(-relay|-dashboard|-caddy)?$' && DOCKER_CONTAINERS=true
+
 echo "This will remove:"
-echo "  - Conduit relay service and binary"
-echo "  - Conduit dashboard service and files"
+$NATIVE_RELAY && echo "  - Conduit relay (native/systemd)"
+$NATIVE_DASHBOARD && echo "  - Conduit dashboard (native/systemd)"
+$DOCKER_CONTAINERS && echo "  - Docker containers (conduit-relay, conduit-dashboard, conduit-caddy)"
+$DOCKER_CONTAINERS && echo "  - Docker volumes (conduit-relay-data, conduit-dashboard-data, etc.)"
+[ -d /opt/conduit ] && echo "  - Docker compose files (/opt/conduit)"
 echo ""
+
+if ! $NATIVE_RELAY && ! $NATIVE_DASHBOARD && ! $DOCKER_CONTAINERS; then
+  echo "Nothing to uninstall."
+  exit 0
+fi
+
 read -r -p "Continue? [y/N]: " CONFIRM < /dev/tty
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
   echo "Aborted."
@@ -26,6 +45,41 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 echo ""
+
+# ════════════════════════════════════════════════════════════════
+# Docker cleanup
+# ════════════════════════════════════════════════════════════════
+if $DOCKER_CONTAINERS; then
+  echo "Stopping Docker containers..."
+
+  # Stop and remove containers
+  for container in conduit-relay conduit-dashboard conduit-caddy conduit; do
+    if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${container}$"; then
+      echo "  Removing $container..."
+      docker stop "$container" 2>/dev/null || true
+      docker rm "$container" 2>/dev/null || true
+    fi
+  done
+
+  # Remove volumes
+  echo "Removing Docker volumes..."
+  for volume in conduit-relay-data conduit-dashboard-data conduit-caddy-data conduit-caddy-config conduit-data; do
+    if docker volume ls -q 2>/dev/null | grep -q "^${volume}$"; then
+      echo "  Removing volume $volume..."
+      docker volume rm "$volume" 2>/dev/null || true
+    fi
+  done
+fi
+
+# Remove Docker compose directory
+if [ -d /opt/conduit ]; then
+  echo "Removing /opt/conduit..."
+  rm -rf /opt/conduit
+fi
+
+# ════════════════════════════════════════════════════════════════
+# Native (systemd) cleanup
+# ════════════════════════════════════════════════════════════════
 
 # Stop and remove relay
 if systemctl is-active --quiet conduit 2>/dev/null; then
@@ -65,8 +119,14 @@ if [ -d /opt/conduit-dashboard ]; then
   rm -rf /opt/conduit-dashboard
 fi
 
+# Remove monitoring user sudoers
+if [ -f /etc/sudoers.d/conduit-dashboard ]; then
+  echo "Removing sudoers config..."
+  rm -f /etc/sudoers.d/conduit-dashboard
+fi
+
 # Reload systemd
-systemctl daemon-reload
+systemctl daemon-reload 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}Uninstall complete.${NC}"
