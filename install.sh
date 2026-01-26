@@ -15,9 +15,9 @@ case "$ARCH" in
 esac
 BINARY_URL="https://github.com/ssmirr/conduit/releases/latest/download/$BINARY"
 
-# Install dependencies
+# Install dependencies (including sudo for minimal systems)
 echo "Installing dependencies..."
-apt-get update -qq && apt-get install -y -qq geoip-bin >/dev/null 2>&1 || true
+apt-get update -qq && apt-get install -y -qq sudo geoip-bin >/dev/null 2>&1 || true
 
 # Stop existing service if running (binary may be locked)
 systemctl stop conduit 2>/dev/null || true

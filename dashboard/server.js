@@ -80,7 +80,7 @@ async function initDb() {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_stats_timestamp ON stats(timestamp)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_stats_server ON stats(server)`);
-  // Geo stats table for country breakdown
+  // Geo stats table for country breakdown (with bandwidth tracking)
   db.run(`
     CREATE TABLE IF NOT EXISTS geo_stats (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,10 +88,26 @@ async function initDb() {
       server TEXT NOT NULL,
       country_code TEXT NOT NULL,
       country_name TEXT NOT NULL,
-      count INTEGER DEFAULT 0
+      count INTEGER DEFAULT 0,
+      bytes INTEGER DEFAULT 0
     )
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_geo_timestamp ON geo_stats(timestamp)`);
+  // Client stats table for per-IP traffic tracking
+  db.run(`
+    CREATE TABLE IF NOT EXISTS client_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      server TEXT NOT NULL,
+      ip_address TEXT NOT NULL,
+      country_code TEXT,
+      country_name TEXT,
+      bytes_in INTEGER DEFAULT 0,
+      bytes_out INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_client_timestamp ON client_stats(timestamp)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_client_ip ON client_stats(ip_address)`);
   saveDb();
 }
 
@@ -142,7 +158,7 @@ function getPooledConnection(server) {
       port: 22,
       username: server.user,
       privateKey,
-      readyTimeout: 15000,
+      readyTimeout: 30000, // 30 seconds for slow Tailscale connections
       keepaliveInterval: SSH_KEEPALIVE_INTERVAL,
       keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
       // Skip host key verification for auto-registered servers
@@ -170,7 +186,7 @@ async function sshExec(server, command) {
 }
 
 function parseConduitStatus(output, serverName) {
-  const result = { name: serverName, status: 'offline', clients: 0, upload: '0 B', download: '0 B', uptime: 'N/A', error: null, maxClients: null, bandwidth: null };
+  const result = { name: serverName, status: 'offline', clients: 0, connecting: 0, upload: '0 B', download: '0 B', uptime: 'N/A', error: null, maxClients: null, bandwidth: null };
   if (!output) return result;
 
   if (output.includes('Active: active') || output.includes('running')) result.status = 'running';
@@ -181,6 +197,7 @@ function parseConduitStatus(output, serverName) {
 
   if (newFormat.length > 0) {
     const m = newFormat[newFormat.length - 1];
+    result.connecting = parseInt(m[1], 10);
     result.clients = parseInt(m[2], 10);
     result.upload = m[3].trim();
     result.download = m[4].trim();
@@ -278,25 +295,51 @@ function normalizeCountryName(name) {
 }
 
 // Fetch geo stats from a single server via tcpdump + geoiplookup
+// Now captures bandwidth (bytes) per country, not just connection counts
 async function fetchGeoStats(server) {
   try {
-    // Capture unique IPs, look up countries, count occurrences
-    // tcpdump output: "timestamp eth0 In IP src_ip.port > dst_ip.port: ..." - IP is field 5
-    const cmd = `sudo -n /usr/bin/timeout 30 /usr/sbin/tcpdump -ni any 'inbound and (tcp or udp)' -c 500 2>/dev/null | awk '{print $5}' | cut -d. -f1-4 | grep -E '^[0-9]+\\.' | sort -u | xargs -n1 geoiplookup 2>/dev/null | grep -v 'not found' | awk -F': ' '{print $2}' | sort | uniq -c | sort -rn`;
+    // Capture packets with sizes, aggregate bytes per IP, then geo lookup
+    // tcpdump -q output includes "length X" for packet sizes
+    const cmd = `sudo -n /usr/bin/timeout 30 /usr/bin/tcpdump -n -q -i any 'inbound and (tcp or udp)' -c 2000 2>/dev/null | \\
+      awk '{
+        for(i=1;i<=NF;i++) if($i=="IP"){src=$(i+1);gsub(/\\.[0-9]+$/,"",src);break}
+        if(match($0,/length ([0-9]+)/,a))len=a[1];else len=0
+        if(src~/^[0-9]+\\./ && len>0)b[src]+=len
+      } END{for(ip in b)print b[ip],ip}' | sort -rn | head -200 | \\
+      while read bytes ip; do
+        geo=$(geoiplookup "$ip" 2>/dev/null | grep -v "not found" | head -1)
+        [ -n "$geo" ] && echo "$bytes|$(echo "$geo" | awk -F": " "{print \\$2}")"
+      done`;
     const output = await sshExec(server, cmd);
     const results = [];
-    // Parse output: "  176 IR, Iran, Islamic Republic of"
+    // Parse output: "12345|IR, Iran, Islamic Republic of"
     for (const line of output.split('\n')) {
-      const match = line.trim().match(/^(\d+)\s+([A-Z]{2}),\s*(.+)$/);
+      const match = line.trim().match(/^(\d+)\|([A-Z]{2}),\s*(.+)$/);
       if (match) {
         results.push({
-          count: parseInt(match[1], 10),
+          bytes: parseInt(match[1], 10),
+          count: 1, // Each line is one IP
           country_code: match[2],
           country_name: normalizeCountryName(match[3].trim()),
         });
       }
     }
-    return { server: server.name, results };
+    // Aggregate by country (sum bytes from multiple IPs in same country)
+    const aggregated = {};
+    for (const r of results) {
+      if (!aggregated[r.country_code]) {
+        aggregated[r.country_code] = { bytes: 0, count: 0, country_name: r.country_name };
+      }
+      aggregated[r.country_code].bytes += r.bytes;
+      aggregated[r.country_code].count += r.count;
+    }
+    const finalResults = Object.entries(aggregated).map(([code, data]) => ({
+      country_code: code,
+      country_name: data.country_name,
+      count: data.count,
+      bytes: data.bytes,
+    }));
+    return { server: server.name, results: finalResults };
   } catch (err) {
     console.error(`[GEO] Failed to fetch from ${server.name}:`, err.message);
     return { server: server.name, results: [], error: err.message };
@@ -310,24 +353,119 @@ async function fetchAllGeoStats() {
 
   // Aggregate by country across all servers
   const countryTotals = {};
+  let totalBytes = 0;
   for (const { results } of allResults) {
-    for (const { country_code, country_name, count } of results) {
+    for (const { country_code, country_name, count, bytes } of results) {
       if (!countryTotals[country_code]) {
-        countryTotals[country_code] = { country_name, count: 0 };
+        countryTotals[country_code] = { country_name, count: 0, bytes: 0 };
       }
       countryTotals[country_code].count += count;
+      countryTotals[country_code].bytes += bytes || 0;
+      totalBytes += bytes || 0;
     }
   }
 
   // Store snapshot per server
   for (const { server, results } of allResults) {
-    for (const { country_code, country_name, count } of results) {
-      db.run(`INSERT INTO geo_stats (timestamp, server, country_code, country_name, count) VALUES (?, ?, ?, ?, ?)`,
-        [timestamp, server, country_code, country_name, count]);
+    for (const { country_code, country_name, count, bytes } of results) {
+      db.run(`INSERT INTO geo_stats (timestamp, server, country_code, country_name, count, bytes) VALUES (?, ?, ?, ?, ?, ?)`,
+        [timestamp, server, country_code, country_name, count, bytes || 0]);
     }
   }
   saveDb();
-  console.log(`[GEO] Captured ${Object.keys(countryTotals).length} countries from ${allResults.filter(r => r.results.length > 0).length}/${SERVERS.length} servers`);
+  console.log(`[GEO] Captured ${Object.keys(countryTotals).length} countries, ${formatBytes(totalBytes)} from ${allResults.filter(r => r.results.length > 0).length}/${SERVERS.length} servers`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLIENT (PER-IP) TRAFFIC TRACKING
+// ═══════════════════════════════════════════════════════════════════
+
+// Fetch per-IP traffic stats from a single server
+async function fetchClientStats(server) {
+  try {
+    // Capture inbound and outbound traffic per IP
+    // Inbound = bytes coming TO the server (client upload)
+    // Outbound = bytes going FROM the server (client download)
+    const cmd = `sudo -n /usr/bin/timeout 20 /usr/bin/tcpdump -n -q -i any '(tcp or udp)' -c 3000 2>/dev/null | \\
+      awk '{
+        dir=""; src=""; dst=""; len=0
+        for(i=1;i<=NF;i++) {
+          if($i=="In") dir="in"
+          if($i=="Out") dir="out"
+          if($i=="IP" || $i=="IP6") { src=$(i+1); dst=$(i+3) }
+        }
+        gsub(/\\.[0-9]+:$/,"",src); gsub(/\\.[0-9]+:$/,"",dst)
+        gsub(/:$/,"",src); gsub(/:$/,"",dst)
+        if(match($0,/length ([0-9]+)/,a)) len=a[1]
+        if(dir=="in" && src~/^[0-9]+\\./ && len>0) { in_bytes[src]+=len; seen[src]=1 }
+        if(dir=="out" && dst~/^[0-9]+\\./ && len>0) { out_bytes[dst]+=len; seen[dst]=1 }
+      } END {
+        for(ip in seen) print in_bytes[ip]+0, out_bytes[ip]+0, ip
+      }' | sort -t' ' -k1,1rn -k2,2rn | head -50 | \\
+      while read bytes_in bytes_out ip; do
+        geo=$(geoiplookup "$ip" 2>/dev/null | grep -v "not found" | head -1)
+        if [ -n "$geo" ]; then
+          cc=$(echo "$geo" | awk -F": " "{print \\$2}" | cut -d',' -f1)
+          cn=$(echo "$geo" | awk -F": " "{print \\$2}" | cut -d',' -f2-)
+          echo "$bytes_in|$bytes_out|$ip|$cc|$cn"
+        else
+          echo "$bytes_in|$bytes_out|$ip||Unknown"
+        fi
+      done`;
+    const output = await sshExec(server, cmd);
+    const results = [];
+    // Parse output: "12345|67890|1.2.3.4|IR|Iran, Islamic Republic of"
+    for (const line of output.split('\n')) {
+      const parts = line.trim().split('|');
+      if (parts.length >= 5) {
+        const bytes_in = parseInt(parts[0], 10) || 0;
+        const bytes_out = parseInt(parts[1], 10) || 0;
+        if (bytes_in > 0 || bytes_out > 0) {
+          results.push({
+            ip_address: parts[2],
+            country_code: parts[3] || '',
+            country_name: normalizeCountryName(parts[4]?.trim() || 'Unknown'),
+            bytes_in,
+            bytes_out,
+          });
+        }
+      }
+    }
+    return { server: server.name, results };
+  } catch (err) {
+    console.error(`[CLIENTS] Failed to fetch from ${server.name}:`, err.message);
+    return { server: server.name, results: [], error: err.message };
+  }
+}
+
+// Fetch client stats from all servers and store
+async function fetchAllClientStats() {
+  const timestamp = Date.now();
+  const allResults = await Promise.all(SERVERS.map(fetchClientStats));
+
+  let totalClients = 0;
+  let totalIn = 0;
+  let totalOut = 0;
+
+  // Store per-IP data
+  for (const { server, results } of allResults) {
+    for (const { ip_address, country_code, country_name, bytes_in, bytes_out } of results) {
+      db.run(`INSERT INTO client_stats (timestamp, server, ip_address, country_code, country_name, bytes_in, bytes_out) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [timestamp, server, ip_address, country_code, country_name, bytes_in, bytes_out]);
+      totalClients++;
+      totalIn += bytes_in;
+      totalOut += bytes_out;
+    }
+  }
+
+  // Clean up old data (keep last 2 hours for per-IP tracking)
+  const cutoff = timestamp - (2 * 3600000);
+  db.run(`DELETE FROM client_stats WHERE timestamp < ?`, [cutoff]);
+  
+  saveDb();
+  if (totalClients > 0) {
+    console.log(`[CLIENTS] Tracked ${totalClients} IPs, IN: ${formatBytes(totalIn)}, OUT: ${formatBytes(totalOut)} from ${allResults.filter(r => r.results.length > 0).length}/${SERVERS.length} servers`);
+  }
 }
 
 // Batched fetching
@@ -386,9 +524,9 @@ function getStatsCommand(mode, serverName) {
     return `docker logs ${container} --tail 50 2>&1 | grep -E "STATS|Connected|started" | tail -20; ` +
            `docker inspect ${container} --format "{{.State.Status}}" 2>/dev/null || echo "stopped"`;
   }
-  // Native (systemd)
+  // Native (systemd) - use 50 lines for better stats capture
   return 'sudo -n systemctl status conduit 2>/dev/null; ' +
-         'sudo -n journalctl -u conduit -n 20 --no-pager 2>/dev/null; ' +
+         'sudo -n journalctl -u conduit -n 50 --no-pager 2>/dev/null; ' +
          'sudo -n grep ExecStart /etc/systemd/system/conduit.service 2>/dev/null';
 }
 
@@ -401,6 +539,9 @@ function getControlCommand(action, mode, serverName) {
   return `sudo -n systemctl ${action} conduit`;
 }
 
+// Cache for last known good stats per server (prevents showing 0/N/A when STATS not in log window)
+const lastKnownStats = new Map();
+
 async function fetchServerStats(server) {
   try {
     const mode = await detectConduitMode(server);
@@ -408,9 +549,49 @@ async function fetchServerStats(server) {
     const stats = parseConduitStatus(output, server.name);
     stats.host = server.host;
     stats.mode = mode; // Track deployment mode
+    
+    // Get or create cache for this server
+    const cached = lastKnownStats.get(server.name) || {};
+    
+    // Cache each field independently - only update if we got a good value
+    // For clients/connecting: cache if > 0, OR if uptime is valid (means STATS line was parsed)
+    const hasValidStats = stats.uptime !== 'N/A';
+    
+    if (hasValidStats) {
+      // STATS line was found - cache all values from it
+      cached.clients = stats.clients;
+      cached.connecting = stats.connecting;
+      cached.uptime = stats.uptime;
+      cached.upload = stats.upload;
+      cached.download = stats.download;
+    } else if (stats.status === 'running' || stats.status === 'connected') {
+      // Service running but STATS line not found - use cached values
+      if (cached.clients !== undefined) stats.clients = cached.clients;
+      if (cached.connecting !== undefined) stats.connecting = cached.connecting;
+      if (cached.uptime !== undefined) stats.uptime = cached.uptime;
+      if (cached.upload !== undefined) stats.upload = cached.upload;
+      if (cached.download !== undefined) stats.download = cached.download;
+    }
+    
+    lastKnownStats.set(server.name, cached);
     return stats;
   } catch (err) {
-    return { name: server.name, host: server.host, status: 'error', clients: 0, upload: '0 B', download: '0 B', uptime: 'N/A', maxClients: null, bandwidth: null, mode: 'unknown', error: err.message };
+    // On error, try to return cached data with error status
+    const cached = lastKnownStats.get(server.name) || {};
+    return { 
+      name: server.name, 
+      host: server.host, 
+      status: 'error', 
+      clients: cached.clients || 0, 
+      connecting: cached.connecting || 0, 
+      upload: cached.upload || '0 B', 
+      download: cached.download || '0 B', 
+      uptime: cached.uptime || 'N/A', 
+      maxClients: null, 
+      bandwidth: null,
+      mode: 'unknown',
+      error: err.message 
+    };
   }
 }
 
@@ -553,18 +734,89 @@ app.get('/api/geo', requireAuth, (req, res) => {
   try {
     const hours = parseInt(req.query.hours) || 24;
     const since = Date.now() - (hours * 3600000);
-    // Aggregate counts by country across time range
-    const stmt = db.prepare(`SELECT country_code, country_name, SUM(count) as total FROM geo_stats WHERE timestamp > ? GROUP BY country_code ORDER BY total DESC`);
+    // Aggregate counts and bytes by country across time range
+    const stmt = db.prepare(`SELECT country_code, country_name, SUM(count) as total_count, SUM(bytes) as total_bytes FROM geo_stats WHERE timestamp > ? GROUP BY country_code ORDER BY total_bytes DESC`);
     stmt.bind([since]);
     const rows = [];
     while (stmt.step()) {
       const row = stmt.getAsObject();
-      rows.push({ country_code: row.country_code, country_name: row.country_name, count: row.total });
+      rows.push({ 
+        country_code: row.country_code, 
+        country_name: row.country_name, 
+        count: row.total_count,
+        bytes: row.total_bytes || 0
+      });
     }
     stmt.free();
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// Get active clients (per-IP traffic) with speed calculation
+app.get('/api/clients', requireAuth, (req, res) => {
+  try {
+    const minutes = parseInt(req.query.minutes) || 30;
+    const since = Date.now() - (minutes * 60000);
+    
+    // Get recent client data with aggregation and speed calculation
+    // Group by IP, sum bytes, calculate speed based on time span
+    const stmt = db.prepare(`
+      SELECT 
+        ip_address,
+        country_code,
+        country_name,
+        server,
+        SUM(bytes_in) as total_in,
+        SUM(bytes_out) as total_out,
+        COUNT(*) as samples,
+        MIN(timestamp) as first_seen,
+        MAX(timestamp) as last_seen
+      FROM client_stats 
+      WHERE timestamp > ? 
+      GROUP BY ip_address, server
+      ORDER BY (total_in + total_out) DESC
+      LIMIT 100
+    `);
+    stmt.bind([since]);
+    const rows = [];
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      const duration = Math.max(1, (row.last_seen - row.first_seen) / 1000); // seconds
+      const totalBytes = row.total_in + row.total_out;
+      // Speed in bytes/sec (only if we have multiple samples over time)
+      const speed = row.samples > 1 ? Math.round(totalBytes / duration) : 0;
+      rows.push({
+        ip: maskIP(row.ip_address),
+        ip_full: row.ip_address, // For debugging, can be removed in production
+        country_code: row.country_code || '',
+        country_name: row.country_name || 'Unknown',
+        server: row.server,
+        bytes_in: row.total_in,
+        bytes_out: row.total_out,
+        total: totalBytes,
+        speed: speed, // bytes per second
+        samples: row.samples,
+        last_seen: row.last_seen,
+      });
+    }
+    stmt.free();
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Mask IP for privacy (show first 2 octets only)
+function maskIP(ip) {
+  if (!ip) return 'Unknown';
+  const parts = ip.split('.');
+  if (parts.length === 4) {
+    return `${parts[0]}.${parts[1]}.*.*`;
+  }
+  // IPv6 - show first segment
+  if (ip.includes(':')) {
+    return ip.split(':').slice(0, 2).join(':') + ':*';
+  }
+  return ip;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // JOIN FLOW - Zero-friction server registration
@@ -613,8 +865,9 @@ else
 fi
 echo ""
 
-# [1/5] Create monitoring user + install SSH key
-echo "[1/5] Creating monitoring user + adding SSH key..."
+# [1/5] Install sudo and create monitoring user + SSH key
+echo "[1/5] Installing sudo and creating monitoring user..."
+apt-get update -qq && apt-get install -y -qq sudo >/dev/null 2>&1 || true
 if ! id "$MON_USER" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$MON_USER"
 fi
@@ -636,13 +889,14 @@ fi
 
 # [2/5] Configure limited sudo for monitoring commands
 echo "[2/5] Configuring sudoers for $MON_USER..."
+mkdir -p /etc/sudoers.d
 cat > "/etc/sudoers.d/conduit-dashboard" <<SUDOEOF
 Defaults:\${MON_USER} !requiretty
 \${MON_USER} ALL=(root) NOPASSWD: \\
   /usr/bin/systemctl * conduit, /bin/systemctl * conduit, \\
   /usr/bin/journalctl -u conduit *, /bin/journalctl -u conduit *, \\
   /usr/bin/grep ExecStart /etc/systemd/system/conduit.service, /bin/grep ExecStart /etc/systemd/system/conduit.service, \\
-  /usr/sbin/tcpdump *
+  /usr/bin/timeout * /usr/bin/tcpdump *, /usr/bin/tcpdump *, /usr/sbin/tcpdump *
 SUDOEOF
 chmod 440 /etc/sudoers.d/conduit-dashboard
 
@@ -817,6 +1071,91 @@ app.put('/api/servers/:name', requireAuth, (req, res) => {
 
   saveServers();
   res.json({ success: true, server: SERVERS[idx] });
+});
+
+// PUT /api/servers/:name/config - Update conduit service config (-m, -b flags)
+app.put('/api/servers/:name/config', requireAuth, async (req, res) => {
+  const server = SERVERS.find(s => s.name === req.params.name);
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const { maxClients, bandwidth } = req.body;
+  
+  // Validate inputs
+  if (maxClients !== undefined && maxClients !== null && maxClients !== '') {
+    const m = parseInt(maxClients, 10);
+    if (isNaN(m) || m < 1 || m > 10000) {
+      return res.status(400).json({ error: 'Max clients must be between 1 and 10000' });
+    }
+  }
+  if (bandwidth !== undefined && bandwidth !== null && bandwidth !== '') {
+    const b = parseInt(bandwidth, 10);
+    if (isNaN(b) || (b < -1) || (b > 1000000)) {
+      return res.status(400).json({ error: 'Bandwidth must be -1 (unlimited) or 0-1000000 Mbps' });
+    }
+  }
+
+  try {
+    // Read current service file
+    const readCmd = 'cat /etc/systemd/system/conduit.service 2>/dev/null';
+    const serviceFile = await sshExec(server, readCmd);
+    
+    if (!serviceFile || !serviceFile.includes('ExecStart')) {
+      return res.status(500).json({ error: 'Could not read service file' });
+    }
+
+    // Parse and update ExecStart line
+    let newServiceFile = serviceFile;
+    const execMatch = serviceFile.match(/^(ExecStart=.*)$/m);
+    if (!execMatch) {
+      return res.status(500).json({ error: 'Could not find ExecStart in service file' });
+    }
+
+    let execLine = execMatch[1];
+    
+    // Update -m flag
+    if (maxClients !== undefined && maxClients !== null && maxClients !== '') {
+      if (execLine.match(/-m\s+\d+/)) {
+        execLine = execLine.replace(/-m\s+\d+/, `-m ${maxClients}`);
+      } else {
+        // Add -m flag after 'conduit start'
+        execLine = execLine.replace(/conduit start/, `conduit start -m ${maxClients}`);
+      }
+    }
+
+    // Update -b flag
+    if (bandwidth !== undefined && bandwidth !== null && bandwidth !== '') {
+      if (execLine.match(/-b\s+-?\d+/)) {
+        execLine = execLine.replace(/-b\s+-?\d+/, `-b ${bandwidth}`);
+      } else {
+        // Add -b flag after -m or after 'conduit start'
+        if (execLine.includes('-m')) {
+          execLine = execLine.replace(/-m\s+\d+/, (match) => `${match} -b ${bandwidth}`);
+        } else {
+          execLine = execLine.replace(/conduit start/, `conduit start -b ${bandwidth}`);
+        }
+      }
+    }
+
+    newServiceFile = serviceFile.replace(execMatch[1], execLine);
+
+    // Write updated service file and restart
+    const updateCmd = `
+      echo '${newServiceFile.replace(/'/g, "'\\''")}' | sudo tee /etc/systemd/system/conduit.service > /dev/null && \
+      sudo systemctl daemon-reload && \
+      sudo systemctl restart conduit
+    `;
+    
+    await sshExec(server, updateCmd);
+    
+    // Clear cache to refresh stats
+    statsCache = { data: null, timestamp: 0 };
+    
+    console.log(`[CONFIG] Updated ${server.name}: maxClients=${maxClients}, bandwidth=${bandwidth}`);
+    res.json({ success: true, message: 'Configuration updated and service restarted' });
+  } catch (err) {
+    console.error(`[CONFIG] Failed to update ${server.name}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1069,6 +1408,11 @@ setInterval(async () => {
   try { await fetchAllGeoStats(); } catch (e) { console.error('Geo poll failed:', e); }
 }, 300000);
 
+// Background polling for client stats (every 2 minutes)
+setInterval(async () => {
+  try { await fetchAllClientStats(); } catch (e) { console.error('Client poll failed:', e); }
+}, 120000);
+
 // Start
 initDb().then(() => {
   app.listen(PORT, () => {
@@ -1082,5 +1426,6 @@ initDb().then(() => {
   // Initial geo fetch after startup (only if servers configured)
   if (SERVERS.length > 0) {
     setTimeout(() => fetchAllGeoStats().catch(e => console.error('Initial geo fetch failed:', e)), 5000);
+    setTimeout(() => fetchAllClientStats().catch(e => console.error('Initial client fetch failed:', e)), 8000);
   }
 }).catch(e => { console.error(e); process.exit(1); });
