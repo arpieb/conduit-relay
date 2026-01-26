@@ -142,6 +142,13 @@ else
   echo "  Using existing SSH key"
 fi
 
+# Add SSH key to authorized_keys for localhost monitoring
+if ! grep -qF "$(cat ~/.ssh/id_ed25519.pub)" ~/.ssh/authorized_keys 2>/dev/null; then
+  cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+  chmod 600 ~/.ssh/authorized_keys
+  echo "  Added key to authorized_keys"
+fi
+
 #
 # Step 5: Configure and Start Dashboard
 #
