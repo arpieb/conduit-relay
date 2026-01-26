@@ -71,16 +71,23 @@ else
   # Install dependencies
   apt-get update -qq && apt-get install -y -qq geoip-bin curl git >/dev/null 2>&1 || true
 
-  # Download binary
+  # Stop existing service if running (binary may be locked)
+  systemctl stop conduit 2>/dev/null || true
+
+  # Download binary to temp file first
   echo "  Downloading $BINARY..."
-  if ! curl -fsSL "$BINARY_URL" -o "$INSTALL_DIR/conduit"; then
+  TEMP_BIN=$(mktemp)
+  if ! curl -fsSL "$BINARY_URL" -o "$TEMP_BIN"; then
     echo -e "${RED}Failed to download conduit from $BINARY_URL${NC}"
+    rm -f "$TEMP_BIN"
     exit 1
   fi
-  if [ ! -s "$INSTALL_DIR/conduit" ]; then
+  if [ ! -s "$TEMP_BIN" ]; then
     echo -e "${RED}Downloaded file is empty${NC}"
+    rm -f "$TEMP_BIN"
     exit 1
   fi
+  mv "$TEMP_BIN" "$INSTALL_DIR/conduit"
   chmod +x "$INSTALL_DIR/conduit"
 
   # Verify binary runs
