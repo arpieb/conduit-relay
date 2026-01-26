@@ -11,23 +11,16 @@ Volunteer relay for [Psiphon](https://psiphon.ca). Routes traffic for users in c
 
 ## Quick Start (Relay + Dashboard)
 
-### Option 1: Native Install (Recommended)
-
 One command installs everything:
 
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
 ```
 
-### Option 2: Docker
-
-If you prefer containers:
-
+**Already have Docker/ssmirr's setup?** Use `docker-setup.sh` instead - it detects existing containers and offers migration:
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-setup.sh | sudo bash
 ```
-
-Both options give you the same result - dashboard + relay.
 
 You'll get:
 - **Dashboard URL** - Web interface to monitor your servers
@@ -45,6 +38,27 @@ curl -sL "http://YOUR_DASHBOARD_IP:3000/join/TOKEN" | sudo bash
 Servers auto-register and appear on your dashboard. The join script auto-detects Docker - if available, it uses containers; otherwise native install.
 
 **Mixed fleets supported:** Dashboard monitors both Docker and native servers.
+
+---
+
+## Updating
+
+Already installed? Update everything with one command:
+
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/update.sh | sudo bash
+```
+
+Or from the dashboard: **Settings → Update Dashboard**
+
+This updates both the relay binary and dashboard code while preserving your config.
+
+**Uninstall:**
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/uninstall.sh | sudo bash
+```
+
+Removes both native and Docker installations.
 
 ---
 

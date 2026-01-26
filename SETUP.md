@@ -123,6 +123,20 @@ curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh 
 
 ---
 
+## آپدیت
+
+قبلاً نصب کردی؟ این رو بزن:
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/update.sh | sudo bash
+```
+
+یا از داشبورد: Settings → Update Dashboard
+
+**حذف کامل:**
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/uninstall.sh | sudo bash
+```
+
 ## کمک
 
 مشکلی داری؟ ایشو بزن: https://github.com/paradixe/conduit-relay/issues
@@ -199,8 +213,19 @@ curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh 
 - Rename servers
 - Delete servers from monitoring
 
-**Updates:**
-Settings > Update Dashboard. Updates everything in one click.
+## Updating
+
+Already installed? Update everything:
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/update.sh | sudo bash
+```
+
+Or from the dashboard: Settings → Update Dashboard
+
+**Uninstall:**
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/uninstall.sh | sudo bash
+```
 
 ## Help
 
