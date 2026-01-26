@@ -160,8 +160,9 @@ cmd_status() {
     servers=$target
   fi
 
-  printf "%-12s  %-10s  %-8s  %-12s  %-12s\n" "NAME" "STATUS" "CLIENTS" "UPLOAD" "DOWNLOAD"
-  printf "%-12s  %-10s  %-8s  %-12s  %-12s\n" "----" "------" "-------" "------" "--------"
+  # Collect all data first
+  local names=() statuses=() clients_arr=() uploads=() downloads=()
+  local w_name=4 w_status=6 w_clients=7 w_upload=6 w_download=8  # header widths
 
   for name in $servers; do
     local output=$(run_on "$name" 'journalctl -u conduit -n 50 --no-pager 2>/dev/null | grep -E "STATS" | tail -5' 2>/dev/null || echo "")
@@ -183,10 +184,35 @@ cmd_status() {
       download=$(echo "$stats" | grep -oP 'Down:\s*\K[^\|]+' | tr -d ' ' || echo "-")
     fi
 
-    local color=$RED
-    [ "$status" = "connected" ] && color=$GREEN
+    names+=("$name")
+    statuses+=("$status")
+    clients_arr+=("$clients")
+    uploads+=("$upload")
+    downloads+=("$download")
 
-    printf "%-12s  ${color}%-10s${NC}  %-8s  %-12s  %-12s\n" "$name" "$status" "$clients" "$upload" "$download"
+    # Update max widths
+    [ ${#name} -gt $w_name ] && w_name=${#name}
+    [ ${#status} -gt $w_status ] && w_status=${#status}
+    [ ${#clients} -gt $w_clients ] && w_clients=${#clients}
+    [ ${#upload} -gt $w_upload ] && w_upload=${#upload}
+    [ ${#download} -gt $w_download ] && w_download=${#download}
+  done
+
+  # Print header
+  printf "%-${w_name}s  %-${w_status}s  %${w_clients}s  %${w_upload}s  %${w_download}s\n" "NAME" "STATUS" "CLIENTS" "UPLOAD" "DOWNLOAD"
+  printf "%-${w_name}s  %-${w_status}s  %${w_clients}s  %${w_upload}s  %${w_download}s\n" \
+    "$(printf '%*s' $w_name '' | tr ' ' '-')" \
+    "$(printf '%*s' $w_status '' | tr ' ' '-')" \
+    "$(printf '%*s' $w_clients '' | tr ' ' '-')" \
+    "$(printf '%*s' $w_upload '' | tr ' ' '-')" \
+    "$(printf '%*s' $w_download '' | tr ' ' '-')"
+
+  # Print rows
+  for i in "${!names[@]}"; do
+    local color=$RED
+    [ "${statuses[$i]}" = "connected" ] && color=$GREEN
+    printf "%-${w_name}s  ${color}%-${w_status}s${NC}  %${w_clients}s  %${w_upload}s  %${w_download}s\n" \
+      "${names[$i]}" "${statuses[$i]}" "${clients_arr[$i]}" "${uploads[$i]}" "${downloads[$i]}"
   done
 }
 
