@@ -93,6 +93,21 @@ async function initDb() {
     )
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_geo_timestamp ON geo_stats(timestamp)`);
+  // Client stats table for per-IP traffic tracking
+  db.run(`
+    CREATE TABLE IF NOT EXISTS client_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      server TEXT NOT NULL,
+      ip_address TEXT NOT NULL,
+      country_code TEXT,
+      country_name TEXT,
+      bytes_in INTEGER DEFAULT 0,
+      bytes_out INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_client_timestamp ON client_stats(timestamp)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_client_ip ON client_stats(ip_address)`);
   saveDb();
 }
 
@@ -360,6 +375,98 @@ async function fetchAllGeoStats() {
   console.log(`[GEO] Captured ${Object.keys(countryTotals).length} countries, ${formatBytes(totalBytes)} from ${allResults.filter(r => r.results.length > 0).length}/${SERVERS.length} servers`);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// CLIENT (PER-IP) TRAFFIC TRACKING
+// ═══════════════════════════════════════════════════════════════════
+
+// Fetch per-IP traffic stats from a single server
+async function fetchClientStats(server) {
+  try {
+    // Capture inbound and outbound traffic per IP
+    // Inbound = bytes coming TO the server (client upload)
+    // Outbound = bytes going FROM the server (client download)
+    const cmd = `sudo -n /usr/bin/timeout 20 /usr/bin/tcpdump -n -q -i any '(tcp or udp)' -c 3000 2>/dev/null | \\
+      awk '{
+        dir=""; src=""; dst=""; len=0
+        for(i=1;i<=NF;i++) {
+          if($i=="In") dir="in"
+          if($i=="Out") dir="out"
+          if($i=="IP" || $i=="IP6") { src=$(i+1); dst=$(i+3) }
+        }
+        gsub(/\\.[0-9]+:$/,"",src); gsub(/\\.[0-9]+:$/,"",dst)
+        gsub(/:$/,"",src); gsub(/:$/,"",dst)
+        if(match($0,/length ([0-9]+)/,a)) len=a[1]
+        if(dir=="in" && src~/^[0-9]+\\./ && len>0) { in_bytes[src]+=len; seen[src]=1 }
+        if(dir=="out" && dst~/^[0-9]+\\./ && len>0) { out_bytes[dst]+=len; seen[dst]=1 }
+      } END {
+        for(ip in seen) print in_bytes[ip]+0, out_bytes[ip]+0, ip
+      }' | sort -t' ' -k1,1rn -k2,2rn | head -50 | \\
+      while read bytes_in bytes_out ip; do
+        geo=$(geoiplookup "$ip" 2>/dev/null | grep -v "not found" | head -1)
+        if [ -n "$geo" ]; then
+          cc=$(echo "$geo" | awk -F": " "{print \\$2}" | cut -d',' -f1)
+          cn=$(echo "$geo" | awk -F": " "{print \\$2}" | cut -d',' -f2-)
+          echo "$bytes_in|$bytes_out|$ip|$cc|$cn"
+        else
+          echo "$bytes_in|$bytes_out|$ip||Unknown"
+        fi
+      done`;
+    const output = await sshExec(server, cmd);
+    const results = [];
+    // Parse output: "12345|67890|1.2.3.4|IR|Iran, Islamic Republic of"
+    for (const line of output.split('\n')) {
+      const parts = line.trim().split('|');
+      if (parts.length >= 5) {
+        const bytes_in = parseInt(parts[0], 10) || 0;
+        const bytes_out = parseInt(parts[1], 10) || 0;
+        if (bytes_in > 0 || bytes_out > 0) {
+          results.push({
+            ip_address: parts[2],
+            country_code: parts[3] || '',
+            country_name: normalizeCountryName(parts[4]?.trim() || 'Unknown'),
+            bytes_in,
+            bytes_out,
+          });
+        }
+      }
+    }
+    return { server: server.name, results };
+  } catch (err) {
+    console.error(`[CLIENTS] Failed to fetch from ${server.name}:`, err.message);
+    return { server: server.name, results: [], error: err.message };
+  }
+}
+
+// Fetch client stats from all servers and store
+async function fetchAllClientStats() {
+  const timestamp = Date.now();
+  const allResults = await Promise.all(SERVERS.map(fetchClientStats));
+
+  let totalClients = 0;
+  let totalIn = 0;
+  let totalOut = 0;
+
+  // Store per-IP data
+  for (const { server, results } of allResults) {
+    for (const { ip_address, country_code, country_name, bytes_in, bytes_out } of results) {
+      db.run(`INSERT INTO client_stats (timestamp, server, ip_address, country_code, country_name, bytes_in, bytes_out) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [timestamp, server, ip_address, country_code, country_name, bytes_in, bytes_out]);
+      totalClients++;
+      totalIn += bytes_in;
+      totalOut += bytes_out;
+    }
+  }
+
+  // Clean up old data (keep last 2 hours for per-IP tracking)
+  const cutoff = timestamp - (2 * 3600000);
+  db.run(`DELETE FROM client_stats WHERE timestamp < ?`, [cutoff]);
+  
+  saveDb();
+  if (totalClients > 0) {
+    console.log(`[CLIENTS] Tracked ${totalClients} IPs, IN: ${formatBytes(totalIn)}, OUT: ${formatBytes(totalOut)} from ${allResults.filter(r => r.results.length > 0).length}/${SERVERS.length} servers`);
+  }
+}
+
 // Batched fetching
 const BATCH_SIZE = 3;
 const BATCH_DELAY = 500;
@@ -536,6 +643,72 @@ app.get('/api/geo', requireAuth, (req, res) => {
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// Get active clients (per-IP traffic) with speed calculation
+app.get('/api/clients', requireAuth, (req, res) => {
+  try {
+    const minutes = parseInt(req.query.minutes) || 30;
+    const since = Date.now() - (minutes * 60000);
+    
+    // Get recent client data with aggregation and speed calculation
+    // Group by IP, sum bytes, calculate speed based on time span
+    const stmt = db.prepare(`
+      SELECT 
+        ip_address,
+        country_code,
+        country_name,
+        server,
+        SUM(bytes_in) as total_in,
+        SUM(bytes_out) as total_out,
+        COUNT(*) as samples,
+        MIN(timestamp) as first_seen,
+        MAX(timestamp) as last_seen
+      FROM client_stats 
+      WHERE timestamp > ? 
+      GROUP BY ip_address, server
+      ORDER BY (total_in + total_out) DESC
+      LIMIT 100
+    `);
+    stmt.bind([since]);
+    const rows = [];
+    while (stmt.step()) {
+      const row = stmt.getAsObject();
+      const duration = Math.max(1, (row.last_seen - row.first_seen) / 1000); // seconds
+      const totalBytes = row.total_in + row.total_out;
+      // Speed in bytes/sec (only if we have multiple samples over time)
+      const speed = row.samples > 1 ? Math.round(totalBytes / duration) : 0;
+      rows.push({
+        ip: maskIP(row.ip_address),
+        ip_full: row.ip_address, // For debugging, can be removed in production
+        country_code: row.country_code || '',
+        country_name: row.country_name || 'Unknown',
+        server: row.server,
+        bytes_in: row.total_in,
+        bytes_out: row.total_out,
+        total: totalBytes,
+        speed: speed, // bytes per second
+        samples: row.samples,
+        last_seen: row.last_seen,
+      });
+    }
+    stmt.free();
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Mask IP for privacy (show first 2 octets only)
+function maskIP(ip) {
+  if (!ip) return 'Unknown';
+  const parts = ip.split('.');
+  if (parts.length === 4) {
+    return `${parts[0]}.${parts[1]}.*.*`;
+  }
+  // IPv6 - show first segment
+  if (ip.includes(':')) {
+    return ip.split(':').slice(0, 2).join(':') + ':*';
+  }
+  return ip;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // JOIN FLOW - Zero-friction server registration
@@ -964,6 +1137,11 @@ setInterval(async () => {
   try { await fetchAllGeoStats(); } catch (e) { console.error('Geo poll failed:', e); }
 }, 300000);
 
+// Background polling for client stats (every 2 minutes)
+setInterval(async () => {
+  try { await fetchAllClientStats(); } catch (e) { console.error('Client poll failed:', e); }
+}, 120000);
+
 // Start
 initDb().then(() => {
   app.listen(PORT, () => {
@@ -977,5 +1155,6 @@ initDb().then(() => {
   // Initial geo fetch after startup (only if servers configured)
   if (SERVERS.length > 0) {
     setTimeout(() => fetchAllGeoStats().catch(e => console.error('Initial geo fetch failed:', e)), 5000);
+    setTimeout(() => fetchAllClientStats().catch(e => console.error('Initial client fetch failed:', e)), 8000);
   }
 }).catch(e => { console.error(e); process.exit(1); });

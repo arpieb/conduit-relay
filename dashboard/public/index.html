@@ -294,6 +294,35 @@
     .bandwidth-eta.warn { color: #eab308; }
     .bandwidth-eta.danger { color: #ef4444; }
 
+    /* Clients section */
+    .client-count { font-size: 0.75rem; color: #525252; font-family: 'JetBrains Mono', monospace; }
+    .clients-table-wrap { overflow-x: auto; max-height: 400px; overflow-y: auto; }
+    .clients-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+    .clients-table th { 
+      text-align: left; 
+      padding: 0.5rem; 
+      color: #525252; 
+      font-weight: 500; 
+      border-bottom: 1px solid #262626;
+      position: sticky;
+      top: 0;
+      background: #111;
+    }
+    .clients-table td { 
+      padding: 0.5rem; 
+      color: #a3a3a3; 
+      border-bottom: 1px solid #1a1a1a;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .clients-table tr:hover td { background: #161616; }
+    .clients-table .ip { color: #737373; }
+    .clients-table .country { color: #a3a3a3; }
+    .clients-table .country-ir { color: #22c55e; }
+    .clients-table .server { color: #525252; font-size: 0.65rem; }
+    .clients-table .bytes { color: #3b82f6; }
+    .clients-table .speed { color: #eab308; }
+    .clients-table .speed-high { color: #22c55e; }
+
     /* Controls */
     .controls { display: flex; gap: 0.5rem; }
     .btn {
@@ -534,7 +563,7 @@
       </div>
       <div class="chart-section">
         <div class="chart-header">
-          <span class="chart-title">Countries (24h bandwidth)</span>
+          <span class="chart-title">Countries (24h)</span>
         </div>
         <canvas id="geoChart"></canvas>
       </div>
@@ -555,6 +584,32 @@
       <div class="bandwidth-content">
         <div class="bandwidth-bars" id="bandwidthBars">
           <div class="loading">Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bandwidth-section" id="clientsSection">
+      <div class="bandwidth-header" onclick="document.getElementById('clientsSection').classList.toggle('open')">
+        <span class="bandwidth-title">Active Clients (last 30 min)</span>
+        <span class="client-count" id="clientCount">0 clients</span>
+      </div>
+      <div class="bandwidth-content">
+        <div class="clients-table-wrap" id="clientsTable">
+          <table class="clients-table">
+            <thead>
+              <tr>
+                <th>IP</th>
+                <th>Country</th>
+                <th>Server</th>
+                <th>Download</th>
+                <th>Upload</th>
+                <th>Speed</th>
+              </tr>
+            </thead>
+            <tbody id="clientsBody">
+              <tr><td colspan="6" class="loading">Loading...</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -758,8 +813,10 @@
 
         // Take top 15 countries, sorted by bytes (bandwidth)
         const top = data.slice(0, 15);
-        const labels = top.map(r => r.country_name);
+        // Labels include country name + IP count
+        const labels = top.map(r => `${r.country_name} (${r.count} IPs)`);
         const bytes = top.map(r => r.bytes || 0);
+        const counts = top.map(r => r.count || 0);
 
         // Color IR (Iran) in green, others in blue
         const colors = top.map(r => r.country_code === 'IR' ? '#22c55e' : '#3b82f6');
@@ -775,6 +832,8 @@
               data: bytes,
               backgroundColor: colors,
               borderRadius: 4,
+              // Store counts for tooltip access
+              counts: counts,
             }]
           },
           options: {
@@ -785,7 +844,10 @@
               legend: { display: false },
               tooltip: {
                 callbacks: {
-                  label: (ctx) => formatBytes(ctx.raw)
+                  label: (ctx) => {
+                    const count = ctx.dataset.counts ? ctx.dataset.counts[ctx.dataIndex] : 0;
+                    return `${formatBytes(ctx.raw)} from ${count} unique IPs`;
+                  }
                 }
               }
             },
@@ -808,6 +870,49 @@
           }
         });
       } catch (e) { console.error('Geo fetch failed:', e); }
+    }
+
+    // Fetch and display active clients
+    async function fetchClients() {
+      try {
+        const res = await fetch('/api/clients?minutes=30');
+        if (res.status === 401) return;
+        const data = await res.json();
+
+        const tbody = document.getElementById('clientsBody');
+        const countEl = document.getElementById('clientCount');
+        
+        if (!data.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#525252;padding:2rem;">No active clients in the last 30 minutes</td></tr>';
+          countEl.textContent = '0 clients';
+          return;
+        }
+
+        countEl.textContent = `${data.length} clients`;
+        
+        // Format speed to human readable (bytes/sec to KB/s or MB/s)
+        const formatSpeed = (bytesPerSec) => {
+          if (!bytesPerSec || bytesPerSec === 0) return '-';
+          if (bytesPerSec < 1024) return `${bytesPerSec} B/s`;
+          if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+          return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+        };
+
+        tbody.innerHTML = data.map(client => {
+          const isIran = client.country_code === 'IR';
+          const speedClass = client.speed > 100 * 1024 ? 'speed-high' : 'speed'; // >100KB/s is high
+          return `
+            <tr>
+              <td class="ip">${client.ip}</td>
+              <td class="country ${isIran ? 'country-ir' : ''}">${client.country_name || 'Unknown'}</td>
+              <td class="server">${client.server}</td>
+              <td class="bytes">${formatBytes(client.bytes_out)}</td>
+              <td class="bytes">${formatBytes(client.bytes_in)}</td>
+              <td class="${speedClass}">${formatSpeed(client.speed)}</td>
+            </tr>
+          `;
+        }).join('');
+      } catch (e) { console.error('Clients fetch failed:', e); }
     }
 
     const formatBandwidth = b => {
@@ -1130,11 +1235,13 @@
     fetchHistory();
     fetchBandwidth();
     fetchGeo();
+    fetchClients();
     checkForUpdates();
     setInterval(fetchStats, 10000);
     setInterval(fetchHistory, 60000);
     setInterval(fetchBandwidth, 60000);
     setInterval(fetchGeo, 60000);
+    setInterval(fetchClients, 30000); // Refresh clients every 30 seconds
     setInterval(checkForUpdates, 300000); // Check for updates every 5 minutes
 
     // ═══════════════════════════════════════════════════════════════
