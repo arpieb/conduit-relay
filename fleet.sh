@@ -5,7 +5,7 @@
 set -e
 
 SERVERS_FILE="${SERVERS_FILE:-$HOME/.conduit-servers}"
-REPO="ssmirr/conduit"
+REPO="Psiphon-Inc/conduit"
 
 # Colors
 RED='\033[0;31m'

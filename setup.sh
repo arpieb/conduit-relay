@@ -17,9 +17,9 @@ BANDWIDTH=${BANDWIDTH:--1}
 # Usage: curl ... | DASHBOARD_ONLY=1 bash
 DASHBOARD_ONLY=${DASHBOARD_ONLY:-0}
 
-# Binary sources
-PRIMARY_URL="https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64"
-FALLBACK_REPO="ssmirr/conduit"
+# Binary sources (official Psiphon releases)
+PRIMARY_URL="https://github.com/Psiphon-Inc/conduit/releases/latest/download/conduit-linux-amd64"
+FALLBACK_URL="https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64"
 
 # Colors
 GREEN='\033[0;32m'
@@ -67,15 +67,12 @@ else
 
   # Download binary
   if curl -sL "$PRIMARY_URL" -o "$INSTALL_DIR/conduit" && [ -s "$INSTALL_DIR/conduit" ]; then
-    echo "  Downloaded conduit binary"
+    echo "  Downloaded from Psiphon"
+  elif curl -sL "$FALLBACK_URL" -o "$INSTALL_DIR/conduit" && [ -s "$INSTALL_DIR/conduit" ]; then
+    echo "  Downloaded from fallback"
   else
-    echo "  Primary failed, trying fallback..."
-    LATEST=$(curl -s "https://api.github.com/repos/$FALLBACK_REPO/releases/latest" | grep -oP '"tag_name": "\K[^"]+')
-    if [ -z "$LATEST" ]; then
-      echo -e "${RED}Failed to download conduit${NC}"
-      exit 1
-    fi
-    curl -sL "https://github.com/$FALLBACK_REPO/releases/download/$LATEST/conduit-linux-amd64" -o "$INSTALL_DIR/conduit"
+    echo -e "${RED}Failed to download conduit${NC}"
+    exit 1
   fi
   chmod +x "$INSTALL_DIR/conduit"
 

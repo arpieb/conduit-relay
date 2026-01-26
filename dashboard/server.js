@@ -676,10 +676,9 @@ app.put('/api/servers/:name', requireAuth, (req, res) => {
 // UPDATE SYSTEM - Check for updates and update all servers
 // ═══════════════════════════════════════════════════════════════════
 
-// Primary: our hosted binary, Fallback: ssmirr releases
-const PRIMARY_BINARY_URL = 'https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64';
-const PRIMARY_VERSION_URL = 'https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/version.txt';
-const FALLBACK_REPO = 'ssmirr/conduit';
+// Official Psiphon releases
+const PRIMARY_BINARY_URL = 'https://github.com/Psiphon-Inc/conduit/releases/latest/download/conduit-linux-amd64';
+const FALLBACK_BINARY_URL = 'https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64';
 
 let cachedLatestVersion = null;
 let versionCacheTime = 0;
@@ -687,26 +686,16 @@ let versionCacheTime = 0;
 // GET /api/version - Check current vs latest version
 app.get('/api/version', requireAuth, async (req, res) => {
   try {
-    // Get latest version (cache for 5 minutes)
+    // Get latest version from Psiphon releases (cache for 5 minutes)
     if (!cachedLatestVersion || Date.now() - versionCacheTime > 300000) {
-      // Try our version.txt first
       try {
-        const vRes = await fetch(PRIMARY_VERSION_URL);
-        if (vRes.ok) {
-          cachedLatestVersion = (await vRes.text()).trim();
-          versionCacheTime = Date.now();
-        }
-      } catch {}
-
-      // Fallback to ssmirr releases
-      if (!cachedLatestVersion) {
-        const ghRes = await fetch(`https://api.github.com/repos/${FALLBACK_REPO}/releases/latest`);
+        const ghRes = await fetch('https://api.github.com/repos/Psiphon-Inc/conduit/releases/latest');
         if (ghRes.ok) {
           const data = await ghRes.json();
           cachedLatestVersion = data.tag_name;
           versionCacheTime = Date.now();
         }
-      }
+      } catch {}
     }
 
     // Get version from each server
@@ -747,17 +736,14 @@ app.post('/api/update', requireAuth, async (req, res) => {
     for (const server of serversToUpdate) {
       try {
         console.log(`[UPDATE] Updating ${server.name}...`);
-        // Try primary (our hosted binary), fallback to ssmirr
         const output = await sshExec(server, `
           set -e
-          # Try primary source first
           if curl -sL "${PRIMARY_BINARY_URL}" -o /usr/local/bin/conduit.new && [ -s /usr/local/bin/conduit.new ]; then
-            echo "Downloaded from primary"
+            echo "Downloaded from Psiphon"
+          elif curl -sL "${FALLBACK_BINARY_URL}" -o /usr/local/bin/conduit.new && [ -s /usr/local/bin/conduit.new ]; then
+            echo "Downloaded from fallback"
           else
-            # Fallback to ssmirr
-            LATEST=$(curl -s "https://api.github.com/repos/${FALLBACK_REPO}/releases/latest" | grep -oP '"tag_name": "\\K[^"]+')
-            curl -sL "https://github.com/${FALLBACK_REPO}/releases/download/$LATEST/conduit-linux-amd64" -o /usr/local/bin/conduit.new
-            echo "Downloaded from fallback ($LATEST)"
+            echo "Download failed" && exit 1
           fi
           chmod +x /usr/local/bin/conduit.new
           systemctl stop conduit

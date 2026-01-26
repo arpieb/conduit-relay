@@ -5,27 +5,23 @@ INSTALL_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/conduit"
 SERVICE_FILE="/etc/systemd/system/conduit.service"
 
-# Binary sources (try in order)
-PRIMARY_URL="https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64"
-FALLBACK_REPO="ssmirr/conduit"
+# Binary sources
+PRIMARY_URL="https://github.com/Psiphon-Inc/conduit/releases/latest/download/conduit-linux-amd64"
+FALLBACK_URL="https://raw.githubusercontent.com/paradixe/conduit-relay/main/bin/conduit-linux-amd64"
 
-# Install geoip-bin for dashboard geo stats
+# Install dependencies
 echo "Installing dependencies..."
 apt-get update -qq && apt-get install -y -qq geoip-bin >/dev/null 2>&1 || true
 
-# Download binary (try primary, then fallback)
+# Download binary
 echo "Downloading conduit..."
 if curl -sL "$PRIMARY_URL" -o "$INSTALL_DIR/conduit" && [ -s "$INSTALL_DIR/conduit" ]; then
-  echo "Downloaded from primary source"
+  echo "Downloaded from Psiphon"
+elif curl -sL "$FALLBACK_URL" -o "$INSTALL_DIR/conduit" && [ -s "$INSTALL_DIR/conduit" ]; then
+  echo "Downloaded from fallback"
 else
-  echo "Primary failed, trying fallback..."
-  LATEST=$(curl -s "https://api.github.com/repos/$FALLBACK_REPO/releases/latest" | grep -oP '"tag_name": "\K[^"]+')
-  if [ -z "$LATEST" ]; then
-    echo "Failed to get fallback release"
-    exit 1
-  fi
-  curl -sL "https://github.com/$FALLBACK_REPO/releases/download/$LATEST/conduit-linux-amd64" -o "$INSTALL_DIR/conduit"
-  echo "Downloaded from fallback ($LATEST)"
+  echo "Failed to download"
+  exit 1
 fi
 chmod +x "$INSTALL_DIR/conduit"
 
