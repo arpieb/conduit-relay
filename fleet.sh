@@ -160,12 +160,24 @@ cmd_status() {
     servers=$target
   fi
 
+  # Count servers for progress
+  local total=0
+  for _ in $servers; do total=$((total + 1)); done
+
   # Collect all data first
   local names=() statuses=() clients_arr=() uploads=() downloads=()
   local w_name=4 w_status=6 w_clients=7 w_upload=6 w_download=8  # header widths
+  local current=0
 
   for name in $servers; do
-    local output=$(run_on "$name" 'journalctl -u conduit -n 50 --no-pager 2>/dev/null | grep -E "STATS" | tail -5' 2>/dev/null || echo "")
+    current=$((current + 1))
+    # Show progress bar
+    local pct=$((current * 100 / total))
+    local filled=$((pct / 5))
+    local empty=$((20 - filled))
+    local bar=$(printf '%*s' $filled '' | tr ' ' '#')$(printf '%*s' $empty '' | tr ' ' '-')
+    printf "\r[%s] %d/%d Checking %s...    " "$bar" "$current" "$total" "$name" >&2
+    local output=$(run_on "$name" 'journalctl -u conduit -n 50 --no-pager 2>/dev/null | grep -E "STATS|Connected" | tail -5' 2>/dev/null || echo "")
     local svc_status=$(run_on "$name" 'systemctl is-active conduit 2>/dev/null' 2>/dev/null || echo "inactive")
 
     local status="offline"
@@ -197,6 +209,9 @@ cmd_status() {
     [ ${#upload} -gt $w_upload ] && w_upload=${#upload}
     [ ${#download} -gt $w_download ] && w_download=${#download}
   done
+
+  # Clear progress bar
+  printf "\r%*s\r" 60 "" >&2
 
   # Print header
   printf "%-${w_name}s  %-${w_status}s  %${w_clients}s  %${w_upload}s  %${w_download}s\n" "NAME" "STATUS" "CLIENTS" "UPLOAD" "DOWNLOAD"
