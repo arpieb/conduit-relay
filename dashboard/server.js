@@ -158,7 +158,7 @@ function getPooledConnection(server) {
       port: 22,
       username: server.user,
       privateKey,
-      readyTimeout: 15000,
+      readyTimeout: 30000, // 30 seconds for slow Tailscale connections
       keepaliveInterval: SSH_KEEPALIVE_INTERVAL,
       keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
       // Skip host key verification for auto-registered servers
