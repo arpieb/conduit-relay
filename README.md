@@ -11,11 +11,23 @@ Volunteer relay for [Psiphon](https://psiphon.ca). Routes traffic for users in c
 
 ## Quick Start (Relay + Dashboard)
 
+### Option 1: Native Install (Recommended)
+
 One command installs everything:
 
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
 ```
+
+### Option 2: Docker
+
+If you prefer containers:
+
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-setup.sh | sudo bash
+```
+
+Both options give you the same result - dashboard + relay.
 
 You'll get:
 - **Dashboard URL** - Web interface to monitor your servers
@@ -30,7 +42,9 @@ Optionally enter a domain during setup to get HTTPS via Let's Encrypt.
 curl -sL "http://YOUR_DASHBOARD_IP:3000/join/TOKEN" | sudo bash
 ```
 
-Servers auto-register and appear on your dashboard.
+Servers auto-register and appear on your dashboard. The join script auto-detects Docker - if available, it uses containers; otherwise native install.
+
+**Mixed fleets supported:** Dashboard monitors both Docker and native servers.
 
 ---
 
@@ -48,19 +62,32 @@ Servers auto-register and appear on your dashboard.
 
 If you just want the relay without the web dashboard:
 
+**Native:**
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/install.sh | sudo bash
 ```
 
+**Docker:**
+```bash
+curl -sLO https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-compose.relay-only.yml
+docker compose -f docker-compose.relay-only.yml up -d
+```
+
 **Configuration:**
-- `-m 200` max clients (default)
-- `-b -1` unlimited bandwidth (default)
+- `MAX_CLIENTS=200` max concurrent clients (default)
+- `BANDWIDTH=-1` unlimited bandwidth (default)
 
 Custom: `curl ... | MAX_CLIENTS=500 BANDWIDTH=100 bash`
 
+**Commands:**
 ```bash
+# Native
 systemctl status conduit      # status
 journalctl -u conduit -f      # logs
+
+# Docker
+docker logs conduit-relay -f  # logs
+docker ps                     # status
 ```
 
 ---

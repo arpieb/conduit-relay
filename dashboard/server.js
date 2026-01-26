@@ -346,31 +346,45 @@ async function detectConduitMode(server) {
   }
 
   try {
-    // Single command to detect mode: check Docker first, then systemd
+    // Single command to detect mode: check Docker first (both container names), then systemd
     const output = await sshExec(server,
-      'docker ps --filter name=conduit-relay --format "{{.Names}}" 2>/dev/null || echo ""; ' +
+      'docker ps --format "{{.Names}}" 2>/dev/null | grep -E "^conduit(-relay)?$" | head -1 || echo ""; ' +
       'systemctl is-active conduit 2>/dev/null || echo ""'
     );
 
     let mode = 'unknown';
-    if (output.includes('conduit-relay')) {
+    let containerName = null;
+    // Match both 'conduit' (ssmirr) and 'conduit-relay' (our) container names
+    const containerMatch = output.match(/^(conduit(-relay)?)$/m);
+    if (containerMatch) {
       mode = 'docker';
+      containerName = containerMatch[1];
+      // Store container name for later use
+      serverModeCache.set(server.name, { mode, containerName, timestamp: Date.now() });
+      return mode;
     } else if (output.includes('active')) {
       mode = 'native';
     }
 
-    serverModeCache.set(server.name, { mode, timestamp: Date.now() });
+    serverModeCache.set(server.name, { mode, containerName: null, timestamp: Date.now() });
     return mode;
   } catch {
     return 'unknown';
   }
 }
 
+// Get container name for a server (from cache)
+function getContainerName(serverName) {
+  const cached = serverModeCache.get(serverName);
+  return cached?.containerName || 'conduit-relay';
+}
+
 // Get stats command based on deployment mode
-function getStatsCommand(mode) {
+function getStatsCommand(mode, serverName) {
   if (mode === 'docker') {
-    return 'docker logs conduit-relay --tail 50 2>&1 | grep -E "STATS|Connected|started" | tail -20; ' +
-           'docker inspect conduit-relay --format "{{.State.Status}}" 2>/dev/null || echo "stopped"';
+    const container = getContainerName(serverName);
+    return `docker logs ${container} --tail 50 2>&1 | grep -E "STATS|Connected|started" | tail -20; ` +
+           `docker inspect ${container} --format "{{.State.Status}}" 2>/dev/null || echo "stopped"`;
   }
   // Native (systemd)
   return 'sudo -n systemctl status conduit 2>/dev/null; ' +
@@ -379,9 +393,10 @@ function getStatsCommand(mode) {
 }
 
 // Get service control command based on mode
-function getControlCommand(action, mode) {
+function getControlCommand(action, mode, serverName) {
   if (mode === 'docker') {
-    return `docker ${action} conduit-relay`;
+    const container = getContainerName(serverName);
+    return `docker ${action} ${container}`;
   }
   return `sudo -n systemctl ${action} conduit`;
 }
@@ -389,7 +404,7 @@ function getControlCommand(action, mode) {
 async function fetchServerStats(server) {
   try {
     const mode = await detectConduitMode(server);
-    const output = await sshExec(server, getStatsCommand(mode));
+    const output = await sshExec(server, getStatsCommand(mode, server.name));
     const stats = parseConduitStatus(output, server.name);
     stats.host = server.host;
     stats.mode = mode; // Track deployment mode
@@ -993,7 +1008,7 @@ app.post('/api/control/:action', requireAuth, async (req, res) => {
     const results = await Promise.all(SERVERS.map(async s => {
       try {
         const mode = await detectConduitMode(s);
-        await sshExec(s, getControlCommand(action, mode));
+        await sshExec(s, getControlCommand(action, mode, s.name));
         return { server: s.name, success: true, mode };
       } catch (e) { return { server: s.name, success: false, error: e.message }; }
     }));
@@ -1009,7 +1024,7 @@ app.post('/api/control/:server/:action', requireAuth, async (req, res) => {
   if (!server) return res.status(404).json({ error: 'Server not found' });
   try {
     const mode = await detectConduitMode(server);
-    await sshExec(server, getControlCommand(action, mode));
+    await sshExec(server, getControlCommand(action, mode, server.name));
     statsCache = { data: null, timestamp: 0 };
     res.json({ server: serverName, action, success: true, mode });
   } catch (e) { res.status(500).json({ server: serverName, action, success: false, error: e.message }); }
@@ -1034,7 +1049,7 @@ async function checkBandwidthLimits() {
           console.log(`[AUTO-STOP] ${server.name} exceeded limit (${(upload / 1024**4).toFixed(2)} TB / ${(server.bandwidthLimit / 1024**4).toFixed(2)} TB)`);
           try {
             const mode = await detectConduitMode(server);
-            await sshExec(server, getControlCommand('stop', mode));
+            await sshExec(server, getControlCommand('stop', mode, server.name));
             console.log(`[AUTO-STOP] ${server.name} stopped (${mode})`);
           } catch (e) { console.error(`[AUTO-STOP] Failed to stop ${server.name}:`, e.message); }
         }

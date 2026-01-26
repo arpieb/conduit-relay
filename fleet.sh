@@ -63,13 +63,17 @@ run_on() {
 }
 
 # Detect if server runs Docker or native conduit
+# Returns: "docker:container-name" or "native" or "unknown"
 detect_mode() {
   local name=$1
   local output
-  output=$(run_on "$name" 'docker ps --filter name=conduit-relay --format "{{.Names}}" 2>/dev/null; systemctl is-active conduit 2>/dev/null' 2>/dev/null || echo "")
-  if echo "$output" | grep -q "conduit-relay"; then
-    echo "docker"
-  elif echo "$output" | grep -q "active"; then
+  # Check for both 'conduit' (ssmirr) and 'conduit-relay' (our) container names
+  output=$(run_on "$name" 'docker ps --format "{{.Names}}" 2>/dev/null | grep -E "^conduit(-relay)?$" | head -1; systemctl is-active conduit 2>/dev/null' 2>/dev/null || echo "")
+  local container
+  container=$(echo "$output" | grep -E "^conduit(-relay)?$" | head -1)
+  if [ -n "$container" ]; then
+    echo "docker:$container"
+  elif echo "$output" | grep -q "^active"; then
     echo "native"
   else
     echo "unknown"
@@ -79,8 +83,9 @@ detect_mode() {
 # Get logs command based on mode
 get_logs_cmd() {
   local mode=$1
-  if [ "$mode" = "docker" ]; then
-    echo 'docker logs conduit-relay --tail 50 2>&1'
+  if [[ "$mode" == docker:* ]]; then
+    local container="${mode#docker:}"
+    echo "docker logs $container --tail 50 2>&1"
   else
     echo 'journalctl -u conduit -n 50 --no-pager 2>/dev/null'
   fi
@@ -89,8 +94,9 @@ get_logs_cmd() {
 # Get control command based on mode
 get_control_cmd() {
   local action=$1 mode=$2
-  if [ "$mode" = "docker" ]; then
-    echo "docker $action conduit-relay"
+  if [[ "$mode" == docker:* ]]; then
+    local container="${mode#docker:}"
+    echo "docker $action $container"
   else
     echo "sudo -n systemctl $action conduit"
   fi

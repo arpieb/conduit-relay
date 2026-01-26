@@ -44,9 +44,14 @@ Are you sure you want to continue connecting (yes/no)?
 
 ## ۳. نصب (یه دستور)
 
-این رو کپی پیست کن:
+**روش ۱ - معمولی:**
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
+```
+
+**روش ۲ - داکر:**
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-setup.sh | sudo bash
 ```
 
 صبر کن تا تموم بشه. آخرش یه چیزی مثل این میبینی:
@@ -149,8 +154,14 @@ First time it asks about fingerprint - type `yes`, enter. Then paste password.
 
 ## 3. Install (One Command)
 
+**Option 1 - Native:**
 ```bash
 curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/setup.sh | sudo bash
+```
+
+**Option 2 - Docker:**
+```bash
+curl -sL https://raw.githubusercontent.com/paradixe/conduit-relay/main/docker-setup.sh | sudo bash
 ```
 
 After it finishes you'll see:
