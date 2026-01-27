@@ -1198,6 +1198,11 @@
                 <span style="display:block;font-size:0.75rem;color:#737373;margin-bottom:0.375rem;text-transform:uppercase;letter-spacing:0.05em">Display Name</span>
                 <input type="text" id="edit-name" value="${server.name}" style="width:100%;background:#0a0a0a;border:1px solid #262626;border-radius:6px;padding:0.625rem;color:#e5e5e5;font-size:0.875rem">
               </label>
+              <label style="display:block;margin-bottom:1rem">
+                <span style="display:block;font-size:0.75rem;color:#737373;margin-bottom:0.375rem;text-transform:uppercase;letter-spacing:0.05em">SSH Port</span>
+                <input type="number" id="edit-ssh-port" value="${server.sshPort || 22}" placeholder="22" min="1" max="65535" style="width:100%;background:#0a0a0a;border:1px solid #262626;border-radius:6px;padding:0.625rem;color:#e5e5e5;font-family:'JetBrains Mono',monospace;font-size:0.875rem">
+                <span style="font-size:0.6875rem;color:#525252;margin-top:0.25rem;display:block">Change if using non-standard SSH port</span>
+              </label>
             </div>
             <div style="padding:1rem 1.25rem;border-top:1px solid #1a1a1a;display:flex;justify-content:space-between">
               <button onclick="deleteNode('${serverName}')" style="background:rgba(239,68,68,0.15);border:none;color:#ef4444;padding:0.5rem 1rem;border-radius:6px;cursor:pointer;font-size:0.8125rem">Delete</button>
@@ -1252,12 +1257,13 @@
     async function saveNode(serverName) {
       const bandwidth = document.getElementById('edit-bandwidth').value;
       const name = document.getElementById('edit-name').value;
+      const sshPort = document.getElementById('edit-ssh-port').value;
 
       try {
         const res = await fetch(`/api/servers/${serverName}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, bandwidthLimit: bandwidth || null })
+          body: JSON.stringify({ name, bandwidthLimit: bandwidth || null, sshPort: sshPort || null })
         });
         const data = await res.json();
         if (data.success) {

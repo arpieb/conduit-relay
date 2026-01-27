@@ -155,7 +155,7 @@ function getPooledConnection(server) {
 
     conn.connect({
       host: server.host,
-      port: 22,
+      port: server.sshPort || 22,
       username: server.user,
       privateKey,
       readyTimeout: 30000, // 30 seconds for slow Tailscale connections
@@ -823,6 +823,7 @@ function maskIP(ip) {
 // ═══════════════════════════════════════════════════════════════════
 
 // GET /join/:token - Returns bash script for auto-registration
+// Supports ?port=2222 to specify custom SSH port
 app.get('/join/:token', (req, res) => {
   if (!JOIN_TOKEN || req.params.token !== JOIN_TOKEN) {
     return res.status(403).type('text/plain').send('echo "Invalid or expired join token"');
@@ -837,18 +838,27 @@ app.get('/join/:token', (req, res) => {
 
   const dashboardHost = req.headers.host?.split(':')[0] || req.hostname;
   const dashboardPort = PORT;
+  const customSshPort = req.query.port ? parseInt(req.query.port, 10) : null;
 
   const script = `#!/bin/bash
 set -e
 
 MON_USER="${CONDUIT_MON_USER}"
 DEPLOY_MODE=""
+SSH_PORT="${customSshPort || ''}"
 
 echo ""
 echo "╔═══════════════════════════════════════════════╗"
 echo "║     Connecting to Conduit Dashboard           ║"
 echo "╚═══════════════════════════════════════════════╝"
 echo ""
+
+# Detect SSH port (from query param, sshd_config, or default to 22)
+if [ -z "\$SSH_PORT" ]; then
+  SSH_PORT=\$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print \$2}' | head -1)
+  [ -z "\$SSH_PORT" ] && SSH_PORT=22
+fi
+echo "SSH port: \$SSH_PORT"
 
 # Detect deployment mode
 if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
@@ -954,7 +964,7 @@ IP=\$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -4 -s --con
 RESULT=\$(curl -sX POST "http://${dashboardHost}:${dashboardPort}/api/register" \\
   -H "Content-Type: application/json" \\
   -H "X-Join-Token: ${JOIN_TOKEN}" \\
-  -d "{\\"name\\":\\"\$HOSTNAME\\",\\"host\\":\\"\$IP\\",\\"user\\":\\"$MON_USER\\"}" 2>/dev/null)
+  -d "{\\"name\\":\\"\$HOSTNAME\\",\\"host\\":\\"\$IP\\",\\"user\\":\\"$MON_USER\\",\\"sshPort\\":\$SSH_PORT}" 2>/dev/null)
 
 if echo "\$RESULT" | grep -q '"success":true'; then
   echo ""
@@ -962,6 +972,7 @@ if echo "\$RESULT" | grep -q '"success":true'; then
   echo "  Connected to dashboard!"
   echo "  Name: \$HOSTNAME"
   echo "  IP:   \$IP"
+  echo "  SSH:  \$SSH_PORT"
   echo "  User: $MON_USER"
   echo "  Mode: \$DEPLOY_MODE"
   echo "  View: http://${dashboardHost}:${dashboardPort}"
@@ -982,21 +993,28 @@ app.post('/api/register', (req, res) => {
     return res.status(403).json({ error: 'Invalid token' });
   }
 
-  const { name, host, user } = req.body;
+  const { name, host, user, sshPort } = req.body;
   if (!name || !host) {
     return res.status(400).json({ error: 'Name and host required' });
   }
+
+  const parsedPort = sshPort ? parseInt(sshPort, 10) : null;
 
   // Check for duplicates by host
   const existingIdx = SERVERS.findIndex(s => s.host === host);
   if (existingIdx >= 0) {
     // Update existing server
-    SERVERS[existingIdx] = { ...SERVERS[existingIdx], name, user: user || CONDUIT_MON_USER };
-    console.log(`[JOIN] Server updated: ${name} (${host})`);
+    SERVERS[existingIdx] = {
+      ...SERVERS[existingIdx],
+      name,
+      user: user || CONDUIT_MON_USER,
+      sshPort: parsedPort || SERVERS[existingIdx].sshPort || null
+    };
+    console.log(`[JOIN] Server updated: ${name} (${host}:${parsedPort || 22})`);
   } else {
     // Add new server
-    SERVERS.push({ name, host, user: user || CONDUIT_MON_USER, bandwidthLimit: null });
-    console.log(`[JOIN] Server registered: ${name} (${host})`);
+    SERVERS.push({ name, host, user: user || CONDUIT_MON_USER, sshPort: parsedPort, bandwidthLimit: null });
+    console.log(`[JOIN] Server registered: ${name} (${host}:${parsedPort || 22})`);
   }
 
   saveServers();
@@ -1055,7 +1073,7 @@ app.put('/api/servers/:name', requireAuth, (req, res) => {
   const idx = SERVERS.findIndex(s => s.name === req.params.name);
   if (idx === -1) return res.status(404).json({ error: 'Server not found' });
 
-  const { name, bandwidthLimit } = req.body;
+  const { name, bandwidthLimit, sshPort } = req.body;
   if (name && name !== req.params.name) {
     // Renaming - update pool key
     const poolEntry = sshPool.get(req.params.name);
@@ -1067,6 +1085,19 @@ app.put('/api/servers/:name', requireAuth, (req, res) => {
   }
   if (bandwidthLimit !== undefined) {
     SERVERS[idx].bandwidthLimit = bandwidthLimit ? parseFloat(bandwidthLimit) * 1024 ** 4 : null;
+  }
+  if (sshPort !== undefined) {
+    // Close existing connection if port changed
+    const oldPort = SERVERS[idx].sshPort || 22;
+    const newPort = sshPort ? parseInt(sshPort, 10) : null;
+    if (oldPort !== (newPort || 22)) {
+      const poolEntry = sshPool.get(SERVERS[idx].name);
+      if (poolEntry) {
+        poolEntry.conn?.end();
+        sshPool.delete(SERVERS[idx].name);
+      }
+    }
+    SERVERS[idx].sshPort = newPort;
   }
 
   saveServers();
